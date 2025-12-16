@@ -64,7 +64,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkgraphic = { path = "path/to/mkgraphic" }
+mkgraphic = "0.1.0"
 ```
 
 ### Basic Example
