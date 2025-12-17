@@ -1,9 +1,11 @@
 [package]
 name = "mkgraphic"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A Rust port of the cycfi/elements GUI framework"
 license = "MIT"
+documentation = "https://docs.rs/mkgraphic"
+repository = "https://github.com/mkaudio-company/mkgraphic"
 authors = ["MinjaeKim"]
 
 [features]
