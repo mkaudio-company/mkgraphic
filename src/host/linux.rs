@@ -11,7 +11,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
-use x11rb::wrapper::ConnectionExt;
+use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
 use crate::support::point::{Point, Extent};
