@@ -1,3 +1,7 @@
+[![](https://img.shields.io/crates/v/mkgraphic.svg)](https://crates.io/crates/mkgraphic)
+[![](https://img.shields.io/crates/l/mkgraphic.svg)](https://crates.io/crates/mkgraphic)
+[![](https://docs.rs/mkgraphic/badge.svg)](https://docs.rs/mkgraphic/)
+
 # mkgraphic
 
 A Rust port of the [cycfi/elements](https://github.com/cycfi/elements) C++ GUI framework.
