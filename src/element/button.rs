@@ -1,6 +1,7 @@
 //! Button elements for user interaction.
 
 use std::any::Any;
+use std::sync::RwLock;
 use super::{Element, ViewLimits};
 use super::context::{BasicContext, Context};
 use crate::support::point::Point;
@@ -21,12 +22,12 @@ pub enum ButtonState {
 }
 
 /// Callback type for button clicks.
-pub type ClickCallback = Box<dyn FnMut() + Send + Sync>;
+pub type ClickCallback = Box<dyn Fn() + Send + Sync>;
 
 /// A basic button element.
 pub struct BasicButton {
     label: String,
-    state: ButtonState,
+    state: RwLock<ButtonState>,
     body_color: Color,
     text_color: Color,
     corner_radius: f32,
@@ -41,7 +42,7 @@ impl BasicButton {
         let theme = get_theme();
         Self {
             label: label.into(),
-            state: ButtonState::Normal,
+            state: RwLock::new(ButtonState::Normal),
             body_color: theme.default_button_color,
             text_color: theme.label_font_color,
             corner_radius: theme.button_corner_radius,
@@ -52,7 +53,7 @@ impl BasicButton {
     }
 
     /// Sets the click callback.
-    pub fn on_click<F: FnMut() + Send + Sync + 'static>(mut self, callback: F) -> Self {
+    pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_click = Some(Box::new(callback));
         self
     }
@@ -87,7 +88,7 @@ impl BasicButton {
 
     /// Returns the current state.
     pub fn state(&self) -> ButtonState {
-        self.state
+        *self.state.read().unwrap()
     }
 
     /// Returns whether the button is pressed (for toggle buttons).
@@ -101,7 +102,8 @@ impl BasicButton {
     }
 
     fn draw_background(&self, ctx: &Context) {
-        let color = match self.state {
+        let state = *self.state.read().unwrap();
+        let color = match state {
             ButtonState::Normal => self.body_color,
             ButtonState::Hover => self.body_color.level(1.2),
             ButtonState::Pressed => self.body_color.level(0.8),
@@ -148,9 +150,22 @@ impl Element for BasicButton {
         ViewLimits::fixed(width, height)
     }
 
+    fn stretch(&self) -> super::ViewStretch {
+        // Button has fixed size, so no stretch
+        super::ViewStretch::new(0.0, 0.0)
+    }
+
     fn draw(&self, ctx: &Context) {
         self.draw_background(ctx);
         self.draw_label(ctx);
+    }
+
+    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+        if ctx.bounds.contains(p) && self.enabled {
+            Some(self)
+        } else {
+            None
+        }
     }
 
     fn wants_control(&self) -> bool {
@@ -158,24 +173,37 @@ impl Element for BasicButton {
     }
 
     fn click(&mut self, ctx: &Context, btn: MouseButton) -> bool {
+        self.handle_click(ctx, btn)
+    }
+
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
         if !self.enabled || btn.button != crate::view::MouseButtonKind::Left {
             return false;
         }
 
+        let mut state = self.state.write().unwrap();
         if btn.down {
-            self.state = ButtonState::Pressed;
+            *state = ButtonState::Pressed;
         } else {
-            if self.state == ButtonState::Pressed {
-                // Button was clicked
-                if let Some(ref mut callback) = self.on_click {
+            if *state == ButtonState::Pressed {
+                // Button was clicked - call callback outside of lock
+                drop(state);
+                if let Some(ref callback) = self.on_click {
                     callback();
                 }
-            }
-            self.state = if ctx.bounds.contains(btn.pos) {
-                ButtonState::Hover
+                let mut state = self.state.write().unwrap();
+                *state = if ctx.bounds.contains(btn.pos) {
+                    ButtonState::Hover
+                } else {
+                    ButtonState::Normal
+                };
             } else {
-                ButtonState::Normal
-            };
+                *state = if ctx.bounds.contains(btn.pos) {
+                    ButtonState::Hover
+                } else {
+                    ButtonState::Normal
+                };
+            }
         }
 
         true
@@ -186,16 +214,17 @@ impl Element for BasicButton {
             return false;
         }
 
+        let mut state = self.state.write().unwrap();
         match status {
             CursorTracking::Entering | CursorTracking::Hovering => {
-                if self.state != ButtonState::Pressed {
-                    self.state = ButtonState::Hover;
+                if *state != ButtonState::Pressed {
+                    *state = ButtonState::Hover;
                 }
                 // Would set cursor to hand
             }
             CursorTracking::Leaving => {
-                if self.state != ButtonState::Pressed {
-                    self.state = ButtonState::Normal;
+                if *state != ButtonState::Pressed {
+                    *state = ButtonState::Normal;
                 }
             }
         }
@@ -205,10 +234,11 @@ impl Element for BasicButton {
 
     fn enable(&mut self, state: bool) {
         self.enabled = state;
+        let mut btn_state = self.state.write().unwrap();
         if !state {
-            self.state = ButtonState::Disabled;
-        } else if self.state == ButtonState::Disabled {
-            self.state = ButtonState::Normal;
+            *btn_state = ButtonState::Disabled;
+        } else if *btn_state == ButtonState::Disabled {
+            *btn_state = ButtonState::Normal;
         }
     }
 
@@ -287,18 +317,24 @@ impl Element for ToggleButton {
             return false;
         }
 
+        let mut state = self.inner.state.write().unwrap();
         if btn.down {
-            self.inner.state = ButtonState::Pressed;
+            *state = ButtonState::Pressed;
         } else {
-            if self.inner.state == ButtonState::Pressed && ctx.bounds.contains(btn.pos) {
+            let was_pressed = *state == ButtonState::Pressed;
+            if was_pressed && ctx.bounds.contains(btn.pos) {
                 // Toggle on release
+                drop(state);
                 self.toggle();
-            }
-            self.inner.state = if ctx.bounds.contains(btn.pos) {
-                ButtonState::Hover
+                let mut state = self.inner.state.write().unwrap();
+                *state = ButtonState::Hover;
             } else {
-                ButtonState::Normal
-            };
+                *state = if ctx.bounds.contains(btn.pos) {
+                    ButtonState::Hover
+                } else {
+                    ButtonState::Normal
+                };
+            }
         }
 
         true

@@ -3,11 +3,13 @@
 //! This module provides a high-level drawing API that wraps the underlying
 //! graphics backend (tiny-skia).
 
+use std::sync::OnceLock;
+
 use super::color::Color;
 use super::point::Point;
 use super::rect::Rect;
 use super::circle::Circle;
-use super::font::Font;
+use super::font::{Font, FontDatabase};
 
 /// Text alignment options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -547,13 +549,227 @@ impl Canvas {
         }
     }
 
-    /// Fills text at the given position (placeholder - requires text rendering integration).
-    pub fn fill_text(&mut self, _text: &str, _p: Point) {
-        // TODO: Integrate with rustybuzz and tiny-skia for text rendering
-        // This would require:
-        // 1. Text shaping with rustybuzz
-        // 2. Glyph rasterization with ttf-parser
-        // 3. Compositing glyphs onto the canvas
+    /// Fills text at the given position.
+    pub fn fill_text(&mut self, text: &str, p: Point) {
+        // Get or initialize the global font database
+        static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
+        let font_db = FONT_DB.get_or_init(FontDatabase::with_system_fonts);
+
+        // Find a suitable font
+        let query = fontdb::Query {
+            families: &[fontdb::Family::SansSerif],
+            weight: fontdb::Weight(400),
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+
+        let Some(font_id) = font_db.inner().query(&query) else {
+            return;
+        };
+
+        // Use with_face_data to access the font bytes directly
+        let mut rendered = false;
+        font_db.inner().with_face_data(font_id, |font_data_ref, face_index| {
+            // Parse the font
+            let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                return;
+            };
+
+            // Create rustybuzz face
+            let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
+                return;
+            };
+
+            // Shape the text
+            let mut buffer = rustybuzz::UnicodeBuffer::new();
+            buffer.push_str(text);
+            let output = rustybuzz::shape(&buzz_face, &[], buffer);
+
+            // Calculate scale factor
+            let units_per_em = face.units_per_em() as f32;
+            let scale = self.font_size / units_per_em;
+
+            // Render each glyph
+            let mut x_pos = p.x;
+            let y_pos = p.y;
+
+            let glyph_infos = output.glyph_infos();
+            let glyph_positions = output.glyph_positions();
+
+            for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
+                let glyph_id = ttf_parser::GlyphId(info.glyph_id as u16);
+
+                let glyph_x = x_pos + (pos.x_offset as f32) * scale;
+                let glyph_y = y_pos + (pos.y_offset as f32) * scale;
+
+                // Render the glyph using outline
+                Self::render_glyph_static(
+                    &mut self.pixmap,
+                    &face,
+                    glyph_id,
+                    glyph_x,
+                    glyph_y,
+                    scale,
+                    self.fill_color,
+                    self.transform,
+                );
+
+                // Advance position
+                x_pos += (pos.x_advance as f32) * scale;
+            }
+            rendered = true;
+        });
+
+        // If rendering failed inside the closure, nothing more to do
+        let _ = rendered;
+    }
+
+    /// Renders a single glyph at the given position.
+    fn render_glyph(
+        &mut self,
+        face: &ttf_parser::Face,
+        glyph_id: ttf_parser::GlyphId,
+        x: f32,
+        y: f32,
+        scale: f32,
+    ) {
+        struct GlyphOutlineBuilder {
+            path: tiny_skia::PathBuilder,
+            x: f32,
+            y: f32,
+            scale: f32,
+        }
+
+        impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
+            fn move_to(&mut self, px: f32, py: f32) {
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale; // Flip Y axis
+                self.path.move_to(tx, ty);
+            }
+
+            fn line_to(&mut self, px: f32, py: f32) {
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.line_to(tx, ty);
+            }
+
+            fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+                let tx1 = self.x + x1 * self.scale;
+                let ty1 = self.y - y1 * self.scale;
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.quad_to(tx1, ty1, tx, ty);
+            }
+
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+                let tx1 = self.x + x1 * self.scale;
+                let ty1 = self.y - y1 * self.scale;
+                let tx2 = self.x + x2 * self.scale;
+                let ty2 = self.y - y2 * self.scale;
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.cubic_to(tx1, ty1, tx2, ty2, tx, ty);
+            }
+
+            fn close(&mut self) {
+                self.path.close();
+            }
+        }
+
+        let mut builder = GlyphOutlineBuilder {
+            path: tiny_skia::PathBuilder::new(),
+            x,
+            y,
+            scale,
+        };
+
+        if face.outline_glyph(glyph_id, &mut builder).is_some() {
+            if let Some(path) = builder.path.finish() {
+                let paint = Self::color_to_paint(self.fill_color);
+                self.pixmap.fill_path(
+                    &path,
+                    &paint,
+                    tiny_skia::FillRule::Winding,
+                    self.transform,
+                    None,
+                );
+            }
+        }
+    }
+
+    /// Renders a single glyph at the given position (static version for use in closures).
+    fn render_glyph_static(
+        pixmap: &mut tiny_skia::Pixmap,
+        face: &ttf_parser::Face,
+        glyph_id: ttf_parser::GlyphId,
+        x: f32,
+        y: f32,
+        scale: f32,
+        fill_color: Color,
+        transform: tiny_skia::Transform,
+    ) {
+        struct GlyphOutlineBuilder {
+            path: tiny_skia::PathBuilder,
+            x: f32,
+            y: f32,
+            scale: f32,
+        }
+
+        impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
+            fn move_to(&mut self, px: f32, py: f32) {
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale; // Flip Y axis
+                self.path.move_to(tx, ty);
+            }
+
+            fn line_to(&mut self, px: f32, py: f32) {
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.line_to(tx, ty);
+            }
+
+            fn quad_to(&mut self, x1: f32, y1: f32, px: f32, py: f32) {
+                let tx1 = self.x + x1 * self.scale;
+                let ty1 = self.y - y1 * self.scale;
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.quad_to(tx1, ty1, tx, ty);
+            }
+
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, px: f32, py: f32) {
+                let tx1 = self.x + x1 * self.scale;
+                let ty1 = self.y - y1 * self.scale;
+                let tx2 = self.x + x2 * self.scale;
+                let ty2 = self.y - y2 * self.scale;
+                let tx = self.x + px * self.scale;
+                let ty = self.y - py * self.scale;
+                self.path.cubic_to(tx1, ty1, tx2, ty2, tx, ty);
+            }
+
+            fn close(&mut self) {
+                self.path.close();
+            }
+        }
+
+        let mut builder = GlyphOutlineBuilder {
+            path: tiny_skia::PathBuilder::new(),
+            x,
+            y,
+            scale,
+        };
+
+        if face.outline_glyph(glyph_id, &mut builder).is_some() {
+            if let Some(path) = builder.path.finish() {
+                let paint = Self::color_to_paint(fill_color);
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    tiny_skia::FillRule::Winding,
+                    transform,
+                    None,
+                );
+            }
+        }
     }
 
     /// Clears the canvas with the given color.

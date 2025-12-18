@@ -5,6 +5,7 @@ use super::{Element, ViewLimits};
 use super::context::{BasicContext, Context};
 use crate::support::color::Color;
 use crate::support::font::Font;
+use crate::support::point::Point;
 use crate::support::theme::get_theme;
 
 /// A simple text label element.
@@ -81,12 +82,22 @@ impl Element for Label {
         ViewLimits::fixed(estimated_width, estimated_height)
     }
 
+    fn stretch(&self) -> super::ViewStretch {
+        // Label has fixed size, so no stretch
+        super::ViewStretch::new(0.0, 0.0)
+    }
+
     fn draw(&self, ctx: &Context) {
         let mut canvas = ctx.canvas.borrow_mut();
         canvas.fill_style(self.color);
         canvas.font(self.font.clone());
         canvas.font_size(self.font_size);
-        canvas.fill_text(&self.text, ctx.bounds.top_left());
+        // Position text with baseline offset (ascent is roughly 80% of font size)
+        let text_pos = Point::new(
+            ctx.bounds.left,
+            ctx.bounds.top + self.font_size * 0.8,
+        );
+        canvas.fill_text(&self.text, text_pos);
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -185,7 +196,12 @@ impl Element for StaticText {
         let mut canvas = ctx.canvas.borrow_mut();
         canvas.fill_style(self.color);
         canvas.font_size(self.font_size);
-        canvas.fill_text(self.text, ctx.bounds.top_left());
+        // Position text with baseline offset (ascent is roughly 80% of font size)
+        let text_pos = Point::new(
+            ctx.bounds.left,
+            ctx.bounds.top + self.font_size * 0.8,
+        );
+        canvas.fill_text(self.text, text_pos);
     }
 
     fn as_any(&self) -> &dyn Any {

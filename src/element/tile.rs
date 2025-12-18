@@ -3,6 +3,7 @@
 //! Tiles arrange elements in vertical or horizontal sequences.
 
 use std::any::Any;
+use std::sync::RwLock;
 use super::{Element, ElementPtr, ViewLimits, FocusRequest, FULL_EXTENT, share};
 use super::context::{BasicContext, Context};
 use super::composite::{Storage, CompositeBase, Composite};
@@ -12,7 +13,7 @@ use crate::support::rect::Rect;
 /// Vertical tile element - stacks children vertically.
 pub struct VTile {
     inner: Composite,
-    tiles: Vec<f32>,
+    tiles: RwLock<Vec<f32>>,
 }
 
 impl VTile {
@@ -20,7 +21,7 @@ impl VTile {
     pub fn new() -> Self {
         Self {
             inner: Composite::new(),
-            tiles: Vec::new(),
+            tiles: RwLock::new(Vec::new()),
         }
     }
 
@@ -29,14 +30,14 @@ impl VTile {
         let len = children.len();
         Self {
             inner: Composite::from_vec(children),
-            tiles: vec![0.0; len + 1],
+            tiles: RwLock::new(vec![0.0; len + 1]),
         }
     }
 
     /// Adds an element.
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
-        self.tiles.push(0.0);
+        self.tiles.write().unwrap().push(0.0);
     }
 
     fn compute_layout(&self, ctx: &BasicContext, height: f32) -> Vec<f32> {
@@ -105,15 +106,31 @@ impl Storage for VTile {
 
 impl CompositeBase for VTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        if index >= self.tiles.len().saturating_sub(1) {
+        // Compute layout if needed
+        // tiles should have count+1 elements, and the last element should be non-zero if properly computed
+        let count = self.inner.len();
+        {
+            let mut tiles = self.tiles.write().unwrap();
+            // Recompute if wrong size or not yet computed (last element is 0)
+            let needs_compute = tiles.len() != count + 1 ||
+                (count > 0 && tiles.get(count).map_or(true, |&v| v == 0.0));
+            if needs_compute && count > 0 {
+                let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
+                let height = ctx.bounds.height();
+                *tiles = self.compute_layout(&basic_ctx, height);
+            }
+        }
+
+        let tiles = self.tiles.read().unwrap();
+        if index >= tiles.len().saturating_sub(1) {
             return Rect::zero();
         }
 
         Rect {
             left: ctx.bounds.left,
-            top: ctx.bounds.top + self.tiles[index],
+            top: ctx.bounds.top + tiles[index],
             right: ctx.bounds.right,
-            bottom: ctx.bounds.top + self.tiles[index + 1],
+            bottom: ctx.bounds.top + tiles[index + 1],
         }
     }
 }
@@ -146,15 +163,15 @@ impl Element for VTile {
             if let Some(child) = self.inner.at(i) {
                 let bounds = self.bounds_of(ctx, i);
                 if crate::support::rect::intersects(&bounds, &ctx.bounds) {
-                    child.draw(ctx);
+                    let child_ctx = ctx.with_bounds(bounds);
+                    child.draw(&child_ctx);
                 }
             }
         }
     }
 
-    fn layout(&mut self, ctx: &Context) {
-        // Create a basic context for limit calculations
-        // Note: In a real implementation, we'd have proper context conversion
+    fn layout(&mut self, _ctx: &Context) {
+        // Layout is handled by allocate
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
@@ -166,7 +183,8 @@ impl Element for VTile {
             let bounds = self.bounds_of(ctx, i);
             if bounds.contains(p) {
                 if let Some(child) = self.inner.at(i) {
-                    if let Some(hit) = child.hit_test(ctx, p, leaf, control) {
+                    let child_ctx = ctx.with_bounds(bounds);
+                    if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
                         return Some(hit);
                     }
                 }
@@ -174,6 +192,22 @@ impl Element for VTile {
         }
 
         if leaf { None } else { Some(self) }
+    }
+
+    fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
+        // Find child at click position and forward the click
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if bounds.contains(btn.pos) {
+                if let Some(child) = self.inner.at(i) {
+                    let child_ctx = ctx.with_bounds(bounds);
+                    if child.handle_click(&child_ctx, btn) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn wants_control(&self) -> bool {
@@ -216,7 +250,7 @@ impl Element for VTile {
 /// Horizontal tile element - arranges children horizontally.
 pub struct HTile {
     inner: Composite,
-    tiles: Vec<f32>,
+    tiles: RwLock<Vec<f32>>,
 }
 
 impl HTile {
@@ -224,7 +258,7 @@ impl HTile {
     pub fn new() -> Self {
         Self {
             inner: Composite::new(),
-            tiles: Vec::new(),
+            tiles: RwLock::new(Vec::new()),
         }
     }
 
@@ -233,14 +267,14 @@ impl HTile {
         let len = children.len();
         Self {
             inner: Composite::from_vec(children),
-            tiles: vec![0.0; len + 1],
+            tiles: RwLock::new(vec![0.0; len + 1]),
         }
     }
 
     /// Adds an element.
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
-        self.tiles.push(0.0);
+        self.tiles.write().unwrap().push(0.0);
     }
 
     fn compute_layout(&self, ctx: &BasicContext, width: f32) -> Vec<f32> {
@@ -307,14 +341,29 @@ impl Storage for HTile {
 
 impl CompositeBase for HTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        if index >= self.tiles.len().saturating_sub(1) {
+        // Compute layout if needed
+        let count = self.inner.len();
+        {
+            let mut tiles = self.tiles.write().unwrap();
+            // Recompute if wrong size or not yet computed (last element is 0)
+            let needs_compute = tiles.len() != count + 1 ||
+                (count > 0 && tiles.get(count).map_or(true, |&v| v == 0.0));
+            if needs_compute && count > 0 {
+                let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
+                let width = ctx.bounds.width();
+                *tiles = self.compute_layout(&basic_ctx, width);
+            }
+        }
+
+        let tiles = self.tiles.read().unwrap();
+        if index >= tiles.len().saturating_sub(1) {
             return Rect::zero();
         }
 
         Rect {
-            left: ctx.bounds.left + self.tiles[index],
+            left: ctx.bounds.left + tiles[index],
             top: ctx.bounds.top,
-            right: ctx.bounds.left + self.tiles[index + 1],
+            right: ctx.bounds.left + tiles[index + 1],
             bottom: ctx.bounds.bottom,
         }
     }
@@ -348,7 +397,8 @@ impl Element for HTile {
             if let Some(child) = self.inner.at(i) {
                 let bounds = self.bounds_of(ctx, i);
                 if crate::support::rect::intersects(&bounds, &ctx.bounds) {
-                    child.draw(ctx);
+                    let child_ctx = ctx.with_bounds(bounds);
+                    child.draw(&child_ctx);
                 }
             }
         }
@@ -363,7 +413,8 @@ impl Element for HTile {
             let bounds = self.bounds_of(ctx, i);
             if bounds.contains(p) {
                 if let Some(child) = self.inner.at(i) {
-                    if let Some(hit) = child.hit_test(ctx, p, leaf, control) {
+                    let child_ctx = ctx.with_bounds(bounds);
+                    if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
                         return Some(hit);
                     }
                 }
@@ -371,6 +422,22 @@ impl Element for HTile {
         }
 
         if leaf { None } else { Some(self) }
+    }
+
+    fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
+        // Find child at click position and forward the click
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if bounds.contains(btn.pos) {
+                if let Some(child) = self.inner.at(i) {
+                    let child_ctx = ctx.with_bounds(bounds);
+                    if child.handle_click(&child_ctx, btn) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn wants_control(&self) -> bool {

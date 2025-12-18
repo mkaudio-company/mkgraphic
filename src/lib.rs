@@ -21,19 +21,20 @@
 //!
 //! ## Example
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use mkgraphic::prelude::*;
 //!
 //! fn main() {
-//!     let app = App::new();
-//!     let window = Window::new("Hello MKGraphic", Extent::new(800.0, 600.0));
+//!     let mut app = App::new();
+//!     let mut window = Window::new("Hello MKGraphic", Extent::new(800.0, 600.0));
 //!
 //!     let content = vtile![
 //!         label("Hello, World!"),
-//!         button("Click me!", |_| println!("Clicked!")),
+//!         button("Click me!").on_click(|| println!("Clicked!")),
 //!     ];
 //!
-//!     window.content(content);
+//!     window.set_content(share(content));
+//!     window.show();
 //!     app.run();
 //! }
 //! ```
@@ -57,14 +58,17 @@ pub mod prelude {
     pub use crate::element::{
         Element, ElementPtr, WeakElementPtr,
         ViewLimits, ViewStretch,
+        share,
         context::{BasicContext, Context},
         proxy::Proxy,
         composite::{Composite, CompositeBase},
-        tile::{vtile, htile},
+        tile::{vtile, htile, VTile, HTile},
         align::*,
         margin::*,
         size::*,
         layer::*,
+        label::{label, Label},
+        button::{button, BasicButton},
     };
     pub use crate::view::{
         View, BaseView,
@@ -74,4 +78,5 @@ pub mod prelude {
         TextInfo, DropInfo,
     };
     pub use crate::host::{App, Window};
+    pub use crate::{vtile, htile};
 }

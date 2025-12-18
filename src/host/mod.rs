@@ -12,9 +12,15 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_os = "macos")]
+pub use macos::{MacOSApp, MacOSWindow};
+
 use crate::support::point::Extent;
 use crate::view::View;
 use crate::element::ElementPtr;
+
+#[cfg(target_os = "macos")]
+use objc2_foundation::MainThreadMarker;
 
 /// Window position.
 #[derive(Debug, Clone, Copy)]
@@ -140,23 +146,39 @@ pub struct Window {
     style: WindowStyle,
     view: View,
     handle: Option<WindowHandle>,
+    #[cfg(target_os = "macos")]
+    macos_window: Option<MacOSWindow>,
 }
 
 impl Window {
     /// Creates a new window with the given title and size.
     pub fn new(title: impl Into<String>, size: Extent) -> Self {
+        let title_str = title.into();
+
+        #[cfg(target_os = "macos")]
+        let macos_window = {
+            MainThreadMarker::new().map(|mtm| MacOSWindow::new(&title_str, size, mtm))
+        };
+
         Self {
-            title: title.into(),
+            title: title_str,
             size,
             position: WindowPosition::default(),
             style: WindowStyle::default(),
             view: View::new(size),
             handle: None,
+            #[cfg(target_os = "macos")]
+            macos_window,
         }
     }
 
     /// Creates a new window with the given options.
     fn new_with_options(builder: WindowBuilder) -> Self {
+        #[cfg(target_os = "macos")]
+        let macos_window = {
+            MainThreadMarker::new().map(|mtm| MacOSWindow::new(&builder.title, builder.size, mtm))
+        };
+
         Self {
             title: builder.title,
             size: builder.size,
@@ -164,6 +186,8 @@ impl Window {
             style: builder.style,
             view: View::new(builder.size),
             handle: None,
+            #[cfg(target_os = "macos")]
+            macos_window,
         }
     }
 
@@ -175,7 +199,10 @@ impl Window {
     /// Sets the window title.
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
-        // Platform-specific update
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.set_title(&self.title);
+        }
     }
 
     /// Returns the window size.
@@ -187,7 +214,10 @@ impl Window {
     pub fn set_size(&mut self, size: Extent) {
         self.size = size;
         self.view.set_size(size);
-        // Platform-specific update
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.set_size(size);
+        }
     }
 
     /// Returns the window position.
@@ -198,7 +228,6 @@ impl Window {
     /// Sets the window position.
     pub fn set_position(&mut self, pos: WindowPosition) {
         self.position = pos;
-        // Platform-specific update
     }
 
     /// Returns a reference to the view.
@@ -213,26 +242,35 @@ impl Window {
 
     /// Sets the window content.
     pub fn set_content(&mut self, content: ElementPtr) {
-        self.view.set_content(content);
+        self.view.set_content(content.clone());
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.set_content(content);
+        }
     }
 
     /// Shows the window.
     pub fn show(&mut self) {
-        // Platform-specific implementation
         #[cfg(target_os = "macos")]
-        {
-            // Would use macos module to show window
+        if let Some(ref win) = self.macos_window {
+            win.show();
         }
     }
 
     /// Hides the window.
     pub fn hide(&mut self) {
-        // Platform-specific implementation
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.hide();
+        }
     }
 
     /// Closes the window.
     pub fn close(&mut self) {
-        // Platform-specific implementation
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.close();
+        }
     }
 
     /// Returns whether the window is visible.
@@ -254,34 +292,57 @@ impl Window {
 /// The application.
 pub struct App {
     running: bool,
+    #[cfg(target_os = "macos")]
+    macos_app: Option<MacOSApp>,
 }
 
 impl App {
     /// Creates a new application.
     pub fn new() -> Self {
-        // Platform-specific initialization
-        Self { running: false }
+        #[cfg(target_os = "macos")]
+        {
+            Self {
+                running: false,
+                macos_app: MacOSApp::new(),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self { running: false }
+        }
     }
 
     /// Runs the application event loop.
     pub fn run(&mut self) {
         self.running = true;
-        // Platform-specific event loop
         #[cfg(target_os = "macos")]
         {
-            // Would use macos module to run event loop
+            if let Some(ref app) = self.macos_app {
+                app.run();
+            }
         }
     }
 
     /// Stops the application.
     pub fn stop(&mut self) {
         self.running = false;
-        // Platform-specific stop
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(ref app) = self.macos_app {
+                app.stop();
+            }
+        }
     }
 
     /// Returns whether the application is running.
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// Returns the main thread marker (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn main_thread_marker(&self) -> Option<MainThreadMarker> {
+        MainThreadMarker::new()
     }
 }
 

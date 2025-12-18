@@ -5,17 +5,30 @@
 
 #![cfg(target_os = "macos")]
 
+use std::cell::RefCell;
+
 use objc2::rc::Retained;
+use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_foundation::{
     NSString, MainThreadMarker, NSPoint, NSRect, NSSize,
 };
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
-    NSWindow, NSWindowStyleMask, NSCursor, NSPasteboard,
+    NSWindow, NSWindowStyleMask, NSCursor, NSPasteboard, NSView,
+    NSGraphicsContext, NSEvent,
 };
+use core_graphics::color_space::CGColorSpace;
+use core_graphics::context::CGContext;
+use core_graphics::data_provider::CGDataProvider;
+use core_graphics::image::CGImage;
 
 use crate::support::point::{Point, Extent};
-use crate::view::{View, KeyCode, CursorType, modifiers};
+use crate::support::canvas::Canvas;
+use crate::support::color::Color;
+use crate::support::rect::Rect;
+use crate::element::context::Context;
+use crate::element::ElementPtr;
+use crate::view::{View, KeyCode, CursorType, modifiers, MouseButton, MouseButtonKind};
 
 /// Converts NSPoint to our Point type.
 fn ns_point_to_point(p: NSPoint) -> Point {
@@ -225,9 +238,267 @@ impl MacOSApp {
     }
 }
 
+/// State for our custom view.
+#[derive(Default)]
+struct MKViewIvars {
+    canvas: RefCell<Option<Canvas>>,
+    content: RefCell<Option<ElementPtr>>,
+    size: RefCell<Extent>,
+}
+
+declare_class!(
+    struct MKView;
+
+    unsafe impl ClassType for MKView {
+        type Super = NSView;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "MKView";
+    }
+
+    impl DeclaredClass for MKView {
+        type Ivars = MKViewIvars;
+    }
+
+    unsafe impl MKView {
+        #[method(isFlipped)]
+        fn is_flipped(&self) -> bool {
+            true
+        }
+
+        #[method(acceptsFirstResponder)]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[method(mouseDown:)]
+        fn mouse_down(&self, event: &NSEvent) {
+            self.handle_mouse_event(event, true);
+        }
+
+        #[method(mouseUp:)]
+        fn mouse_up(&self, event: &NSEvent) {
+            self.handle_mouse_event(event, false);
+        }
+
+        #[method(rightMouseDown:)]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            self.handle_mouse_event(event, true);
+        }
+
+        #[method(rightMouseUp:)]
+        fn right_mouse_up(&self, event: &NSEvent) {
+            self.handle_mouse_event(event, false);
+        }
+
+        #[method(drawRect:)]
+        fn draw_rect(&self, _dirty_rect: NSRect) {
+            let ivars = self.ivars();
+
+            // Get actual view frame size
+            let frame = self.frame();
+            let size = Extent::new(frame.size.width as f32, frame.size.height as f32);
+            *ivars.size.borrow_mut() = size;
+
+            let width = size.x as u32;
+            let height = size.y as u32;
+
+            if width == 0 || height == 0 {
+                return;
+            }
+
+            // Create or resize canvas
+            {
+                let mut canvas_opt = ivars.canvas.borrow_mut();
+                let needs_new = match &*canvas_opt {
+                    Some(c) => c.width() != width || c.height() != height,
+                    None => true,
+                };
+                if needs_new {
+                    *canvas_opt = Canvas::new(width, height);
+                }
+            }
+
+            // Draw content and blit to screen
+            let mut canvas_opt = ivars.canvas.borrow_mut();
+            if let Some(ref mut canvas) = *canvas_opt {
+                // Clear with dark background
+                canvas.clear(Color::new(0.2, 0.2, 0.2, 1.0));
+
+                // Draw elements if we have content
+                let content_ref = ivars.content.borrow();
+                if let Some(ref content) = *content_ref {
+                    let bounds = Rect {
+                        left: 0.0,
+                        top: 0.0,
+                        right: size.x,
+                        bottom: size.y,
+                    };
+
+                    // Create a temporary view for the context
+                    let temp_view = View::new(size);
+
+                    // We need to temporarily move the canvas into a RefCell for the Context
+                    // Take canvas out, wrap in RefCell, draw, then put back
+                    let temp_canvas = std::mem::replace(canvas, Canvas::new(1, 1).unwrap());
+                    let canvas_cell = RefCell::new(temp_canvas);
+
+                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                    // Draw the content element
+                    content.draw(&ctx);
+
+                    // Get the canvas back
+                    *canvas = canvas_cell.into_inner();
+                }
+
+                // Blit to screen
+                Self::blit_to_screen(canvas, width, height);
+            }
+        }
+    }
+);
+
+impl MKView {
+    fn new(mtm: MainThreadMarker, size: Extent) -> Retained<Self> {
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(size.x as f64, size.y as f64),
+        );
+
+        let this = mtm.alloc::<MKView>().set_ivars(MKViewIvars {
+            canvas: RefCell::new(None),
+            content: RefCell::new(None),
+            size: RefCell::new(size),
+        });
+
+        unsafe { msg_send_id![super(this), initWithFrame: frame] }
+    }
+
+    fn set_content(&self, content: ElementPtr) {
+        *self.ivars().content.borrow_mut() = Some(content);
+        unsafe { self.setNeedsDisplay(true); }
+    }
+
+    fn set_size(&self, size: Extent) {
+        *self.ivars().size.borrow_mut() = size;
+    }
+
+    fn handle_mouse_event(&self, event: &NSEvent, down: bool) {
+        unsafe {
+            // Get the mouse location in view coordinates
+            let location_in_window = event.locationInWindow();
+            let location = self.convertPoint_fromView(location_in_window, None);
+            let pos = ns_point_to_point(location);
+
+            // Determine which button
+            let button_number = event.buttonNumber();
+            let button_kind = match button_number {
+                0 => MouseButtonKind::Left,
+                1 => MouseButtonKind::Right,
+                2 => MouseButtonKind::Middle,
+                _ => MouseButtonKind::Left,
+            };
+
+            // Create MouseButton event
+            let mouse_btn = MouseButton {
+                down,
+                click_count: event.clickCount() as i32,
+                button: button_kind,
+                modifiers: translate_flags(event.modifierFlags().bits() as usize),
+                pos,
+            };
+
+            // Forward to content element
+            let ivars = self.ivars();
+            let size = *ivars.size.borrow();
+            let content_ref = ivars.content.borrow();
+
+            if let Some(ref content) = *content_ref {
+                let bounds = Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: size.x,
+                    bottom: size.y,
+                };
+
+                // Create a dummy canvas for the context
+                if let Some(dummy_canvas) = Canvas::new(1, 1) {
+                    let canvas_cell = RefCell::new(dummy_canvas);
+                    let temp_view = View::new(size);
+                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                    // Use handle_click for immutable click handling
+                    if content.handle_click(&ctx, mouse_btn) {
+                        // Trigger redraw after click
+                        self.setNeedsDisplay(true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn blit_to_screen(canvas: &Canvas, width: u32, height: u32) {
+        unsafe {
+            // Get the current graphics context
+            let Some(ns_ctx) = NSGraphicsContext::currentContext() else {
+                return;
+            };
+
+            // Get the CGContextRef - use graphicsPort for compatibility
+            // (CGContext property returns an objc2 type that doesn't match)
+            let cg_ctx_ptr: *mut std::ffi::c_void = objc2::msg_send![&ns_ctx, graphicsPort];
+            if cg_ctx_ptr.is_null() {
+                return;
+            }
+
+            // Get pixmap data - tiny-skia stores premultiplied RGBA
+            let pixmap = canvas.pixmap();
+            let data = pixmap.data();
+
+            // Create CGImage from our pixmap
+            let color_space = CGColorSpace::create_device_rgb();
+            let provider = CGDataProvider::from_slice(data);
+
+            // tiny-skia uses premultiplied RGBA in native byte order
+            // On macOS (little-endian), we need:
+            // kCGImageAlphaPremultipliedLast (1) = RGBA with premultiplied alpha
+            // kCGBitmapByteOrderDefault (0) = native byte order
+            // Combined: just 1 for standard RGBA premultiplied
+            let cg_image = CGImage::new(
+                width as usize,
+                height as usize,
+                8,
+                32,
+                width as usize * 4,
+                &color_space,
+                1, // kCGImageAlphaPremultipliedLast (RGBA order)
+                &provider,
+                false,
+                0, // kCGRenderingIntentDefault
+            );
+
+            let rect = core_graphics::geometry::CGRect::new(
+                &core_graphics::geometry::CGPoint::new(0.0, 0.0),
+                &core_graphics::geometry::CGSize::new(width as f64, height as f64),
+            );
+
+            let cg_ctx = CGContext::from_existing_context_ptr(cg_ctx_ptr as *mut _);
+
+            // Flip the context to match our top-left origin coordinate system
+            // Core Graphics has origin at bottom-left, we need top-left
+            cg_ctx.save();
+            cg_ctx.translate(0.0, height as f64);
+            cg_ctx.scale(1.0, -1.0);
+            cg_ctx.draw_image(rect, &cg_image);
+            cg_ctx.restore();
+        }
+    }
+}
+
 /// macOS window wrapper.
 pub struct MacOSWindow {
     window: Retained<NSWindow>,
+    mk_view: Retained<MKView>,
     view: Option<View>,
 }
 
@@ -258,8 +529,13 @@ impl MacOSWindow {
         window.setTitle(&title_str);
         window.center();
 
+        // Create our custom view
+        let mk_view = MKView::new(mtm, size);
+        window.setContentView(Some(&mk_view));
+
         Self {
             window,
+            mk_view,
             view: Some(View::new(size)),
         }
     }
@@ -296,6 +572,12 @@ impl MacOSWindow {
         let mut frame = self.window.frame();
         frame.size = extent_to_ns_size(size);
         self.window.setFrame_display(frame, true);
+        self.mk_view.set_size(size);
+    }
+
+    /// Sets the window content.
+    pub fn set_content(&self, content: ElementPtr) {
+        self.mk_view.set_content(content);
     }
 
     /// Returns a reference to the view.
@@ -306,5 +588,10 @@ impl MacOSWindow {
     /// Returns a mutable reference to the view.
     pub fn view_mut(&mut self) -> Option<&mut View> {
         self.view.as_mut()
+    }
+
+    /// Triggers a redraw.
+    pub fn refresh(&self) {
+        unsafe { self.mk_view.setNeedsDisplay(true); }
     }
 }

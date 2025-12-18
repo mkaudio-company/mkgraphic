@@ -202,6 +202,15 @@ pub trait Element: Send + Sync + Any {
         false
     }
 
+    /// Handles mouse click events (immutable version for use with Arc).
+    ///
+    /// Returns true if the event was handled.
+    /// Default implementation returns false - override this for elements
+    /// that need to handle clicks through Arc<dyn Element>.
+    fn handle_click(&self, _ctx: &Context, _btn: MouseButton) -> bool {
+        false
+    }
+
     /// Handles mouse drag events.
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {}
 
