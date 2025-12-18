@@ -69,7 +69,7 @@ pub mod prelude {
         layer::*,
         label::{label, Label},
         button::{button, BasicButton},
-        slider::{slider, Slider, SliderOrientation},
+        slider::{slider, vslider, Slider, SliderOrientation},
         checkbox::{checkbox, Checkbox, radio_button, RadioButton},
         switch::{slide_switch, SlideSwitch},
         dial::{dial, dial_with_range, Dial},

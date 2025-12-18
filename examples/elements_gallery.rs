@@ -29,6 +29,10 @@ fn create_gallery() -> impl Element {
             section_label("Sliders"),
             margin(5.0, slider().on_change(|v| println!("Slider: {:.2}", v))),
             margin(5.0, slider().value(0.5).on_change(|v| println!("Slider 2: {:.2}", v))),
+            margin(5.0, htile![
+                vslider().on_change(|v| println!("VSlider: {:.2}", v)),
+                vslider().value(0.75).on_change(|v| println!("VSlider 2: {:.2}", v)),
+            ]),
 
             section_label("Checkboxes"),
             margin(5.0, checkbox("Option 1").on_change(|checked| println!("Checkbox 1: {}", checked))),
