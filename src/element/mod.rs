@@ -10,6 +10,21 @@
 //! - [`margin`]: Margin elements
 //! - [`size`]: Size constraint elements
 //! - [`layer`]: Layered elements
+//! - [`slider`]: Slider elements for value selection
+//! - [`checkbox`]: Checkbox and radio button elements
+//! - [`switch`]: Toggle switch elements
+//! - [`dial`]: Rotary dial/knob elements
+//! - [`text_box`]: Text input elements
+//! - [`menu`]: Menu and popup elements
+//! - [`list`]: List and dropdown elements
+//! - [`grid`]: Grid layout element
+//! - [`floating`]: Floating/draggable elements
+//! - [`status_bar`]: Status bar element
+//! - [`thumbwheel`]: Thumbwheel element
+//! - [`scroll`]: Scrollable container element
+//! - [`tabs`]: Tab bar element
+//! - [`tooltip`]: Tooltip element
+//! - [`progress`]: Progress bar element
 
 pub mod context;
 pub mod proxy;
@@ -21,6 +36,21 @@ pub mod size;
 pub mod layer;
 pub mod label;
 pub mod button;
+pub mod slider;
+pub mod checkbox;
+pub mod switch;
+pub mod dial;
+pub mod text_box;
+pub mod menu;
+pub mod list;
+pub mod grid;
+pub mod floating;
+pub mod status_bar;
+pub mod thumbwheel;
+pub mod scroll;
+pub mod tabs;
+pub mod tooltip;
+pub mod progress;
 
 use std::sync::{Arc, Weak};
 use std::any::Any;
