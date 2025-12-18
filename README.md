@@ -29,10 +29,17 @@ mkgraphic is a lightweight, modular GUI framework for Rust that provides an elem
 - **Dial** - Rotary knob control with angular mouse interaction
 - **Checkbox** - Toggle checkbox with label
 - **RadioButton** - Radio button for exclusive selection
+- **SlideSwitch** - iOS-style toggle switch
+- **Thumbwheel** - Scrollable value wheel control
+- **ProgressBar** - Linear and circular progress indicators
 - **List** - Scrollable list with single/multiple selection
 - **Dropdown** - Dropdown menu selection
-- **Menu** - Context/popup menu with items and separators
+- **TabBar** - Tab-based navigation
 - **ScrollView** - Scrollable container with horizontal/vertical scrollbars
+- **Tooltip** - Hover tooltips for elements
+- **StatusBar** - Status bar with segments
+- **Grid** - Grid layout container
+- **NativeMenuBar** - Native OS menu bar integration
 
 ## Project Structure
 
@@ -61,9 +68,16 @@ src/
 │   ├── slider.rs       # Slider control
 │   ├── dial.rs         # Rotary dial/knob
 │   ├── checkbox.rs     # Checkbox and radio buttons
-│   ├── list.rs         # List selection
-│   ├── dropdown.rs     # Dropdown selection
-│   ├── menu.rs         # Context menus
+│   ├── switch.rs       # Toggle switches
+│   ├── thumbwheel.rs   # Thumbwheel control
+│   ├── progress.rs     # Progress indicators
+│   ├── list.rs         # List and dropdown
+│   ├── menu.rs         # Menus and native menu bar
+│   ├── tabs.rs         # Tab bar
+│   ├── tooltip.rs      # Tooltips
+│   ├── status_bar.rs   # Status bar
+│   ├── grid.rs         # Grid layout
+│   ├── floating.rs     # Floating elements
 │   └── scroll.rs       # Scroll view
 ├── view/               # View management
 │   └── mod.rs          # Events and input handling
@@ -141,6 +155,41 @@ let layout = htile![
     halign(0.5, label("Centered")),
     fixed_size(100.0, 50.0, button("Fixed Size")),
 ];
+```
+
+### Native Menu Bar Example
+
+```rust
+use mkgraphic::prelude::*;
+
+fn main() {
+    // Configure menu bar before creating app
+    set_native_menu_bar(
+        native_menu_bar()
+            .app_name("My App")
+            .add_menu(native_menu("File")
+                .add_item(native_menu_item("New")
+                    .shortcut_cmd('n')
+                    .on_select(|| println!("New")))
+                .add_item(native_menu_item("Open...")
+                    .shortcut_cmd('o'))
+                .add_item(native_separator())
+                .add_item(native_menu_item("Save")
+                    .shortcut_cmd('s')))
+            .add_menu(native_menu("View")
+                .add_item(native_menu_item("Zoom In")
+                    .shortcut_cmd('+'))
+                .add_item(native_menu_item("Zoom Out")
+                    .shortcut_cmd('-')))
+            .include_app_menu(true)
+            .include_edit_menu(true)
+            .include_window_menu(true)
+    );
+
+    let mut app = App::new();
+    // ... create windows
+    app.run();
+}
 ```
 
 ## Architecture

@@ -1,7 +1,7 @@
 //! Menu and popup elements.
 
 use std::any::Any;
-use std::sync::RwLock;
+use std::sync::{RwLock, Arc, OnceLock};
 use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
 use crate::support::point::Point;
@@ -12,6 +12,125 @@ use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
 
 /// Menu item callback type.
 pub type MenuItemCallback = Box<dyn Fn() + Send + Sync>;
+
+/// Keyboard modifier flags for menu shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MenuModifiers {
+    pub command: bool,
+    pub shift: bool,
+    pub option: bool,
+    pub control: bool,
+}
+
+impl MenuModifiers {
+    /// No modifiers.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Command key (Cmd on macOS, Ctrl on other platforms).
+    pub fn command() -> Self {
+        Self { command: true, ..Default::default() }
+    }
+
+    /// Shift key.
+    pub fn shift() -> Self {
+        Self { shift: true, ..Default::default() }
+    }
+
+    /// Option key (Alt on other platforms).
+    pub fn option() -> Self {
+        Self { option: true, ..Default::default() }
+    }
+
+    /// Control key.
+    pub fn control() -> Self {
+        Self { control: true, ..Default::default() }
+    }
+
+    /// Adds command modifier.
+    pub fn with_command(mut self) -> Self {
+        self.command = true;
+        self
+    }
+
+    /// Adds shift modifier.
+    pub fn with_shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
+
+    /// Adds option modifier.
+    pub fn with_option(mut self) -> Self {
+        self.option = true;
+        self
+    }
+
+    /// Adds control modifier.
+    pub fn with_control(mut self) -> Self {
+        self.control = true;
+        self
+    }
+}
+
+/// A keyboard shortcut for a menu item.
+#[derive(Debug, Clone)]
+pub struct MenuShortcut {
+    /// The key character (e.g., 'n', 'o', 's').
+    pub key: char,
+    /// The modifier keys.
+    pub modifiers: MenuModifiers,
+}
+
+impl MenuShortcut {
+    /// Creates a new shortcut with Cmd modifier (standard for macOS).
+    pub fn cmd(key: char) -> Self {
+        Self {
+            key,
+            modifiers: MenuModifiers::command(),
+        }
+    }
+
+    /// Creates a new shortcut with Cmd+Shift modifiers.
+    pub fn cmd_shift(key: char) -> Self {
+        Self {
+            key,
+            modifiers: MenuModifiers::command().with_shift(),
+        }
+    }
+
+    /// Creates a new shortcut with Cmd+Option modifiers.
+    pub fn cmd_option(key: char) -> Self {
+        Self {
+            key,
+            modifiers: MenuModifiers::command().with_option(),
+        }
+    }
+
+    /// Creates a new shortcut with custom modifiers.
+    pub fn with_modifiers(key: char, modifiers: MenuModifiers) -> Self {
+        Self { key, modifiers }
+    }
+
+    /// Returns the display string for this shortcut.
+    pub fn display_string(&self) -> String {
+        let mut s = String::new();
+        if self.modifiers.control {
+            s.push_str("Ctrl+");
+        }
+        if self.modifiers.option {
+            s.push_str("Opt+");
+        }
+        if self.modifiers.shift {
+            s.push_str("Shift+");
+        }
+        if self.modifiers.command {
+            s.push_str("Cmd+");
+        }
+        s.push(self.key.to_ascii_uppercase());
+        s
+    }
+}
 
 /// A menu item.
 pub struct MenuItem {
@@ -545,6 +664,307 @@ impl Element for Popup {
     }
 }
 
+// =============================================================================
+// Native Menu Bar API
+// =============================================================================
+
+/// A native menu item for the OS menu bar.
+#[derive(Clone)]
+pub struct NativeMenuItem {
+    /// The label text.
+    pub label: String,
+    /// The keyboard shortcut.
+    pub shortcut: Option<MenuShortcut>,
+    /// Whether this item is enabled.
+    pub enabled: bool,
+    /// Whether this item is checked.
+    pub checked: bool,
+    /// Submenu items (if this is a submenu).
+    pub submenu: Option<Vec<NativeMenuItem>>,
+    /// The action callback.
+    pub action: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Unique identifier for this item.
+    pub id: Option<String>,
+}
+
+impl NativeMenuItem {
+    /// Creates a new native menu item.
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            shortcut: None,
+            enabled: true,
+            checked: false,
+            submenu: None,
+            action: None,
+            id: None,
+        }
+    }
+
+    /// Creates a separator item.
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            shortcut: None,
+            enabled: false,
+            checked: false,
+            submenu: None,
+            action: None,
+            id: None,
+        }
+    }
+
+    /// Returns whether this is a separator.
+    pub fn is_separator(&self) -> bool {
+        self.label.is_empty() && self.submenu.is_none()
+    }
+
+    /// Sets the keyboard shortcut with Cmd modifier.
+    pub fn shortcut_cmd(mut self, key: char) -> Self {
+        self.shortcut = Some(MenuShortcut::cmd(key));
+        self
+    }
+
+    /// Sets the keyboard shortcut with Cmd+Shift modifiers.
+    pub fn shortcut_cmd_shift(mut self, key: char) -> Self {
+        self.shortcut = Some(MenuShortcut::cmd_shift(key));
+        self
+    }
+
+    /// Sets the keyboard shortcut with Cmd+Option modifiers.
+    pub fn shortcut_cmd_option(mut self, key: char) -> Self {
+        self.shortcut = Some(MenuShortcut::cmd_option(key));
+        self
+    }
+
+    /// Sets a custom keyboard shortcut.
+    pub fn shortcut(mut self, shortcut: MenuShortcut) -> Self {
+        self.shortcut = Some(shortcut);
+        self
+    }
+
+    /// Sets whether this item is enabled.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Sets the checked state.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked;
+        self
+    }
+
+    /// Sets a submenu.
+    pub fn submenu(mut self, items: Vec<NativeMenuItem>) -> Self {
+        self.submenu = Some(items);
+        self
+    }
+
+    /// Sets the action callback.
+    pub fn on_select<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
+        self.action = Some(Arc::new(callback));
+        self
+    }
+
+    /// Sets a unique identifier.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+}
+
+/// A native menu category (top-level menu in the menu bar).
+#[derive(Clone)]
+pub struct NativeMenu {
+    /// The menu title (shown in the menu bar).
+    pub title: String,
+    /// The menu items.
+    pub items: Vec<NativeMenuItem>,
+}
+
+impl NativeMenu {
+    /// Creates a new native menu.
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            items: Vec::new(),
+        }
+    }
+
+    /// Creates a new native menu with items.
+    pub fn with_items(title: impl Into<String>, items: Vec<NativeMenuItem>) -> Self {
+        Self {
+            title: title.into(),
+            items,
+        }
+    }
+
+    /// Adds an item to this menu.
+    pub fn add_item(mut self, item: NativeMenuItem) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    /// Adds a separator.
+    pub fn add_separator(mut self) -> Self {
+        self.items.push(NativeMenuItem::separator());
+        self
+    }
+
+    /// Adds multiple items.
+    pub fn add_items(mut self, items: Vec<NativeMenuItem>) -> Self {
+        self.items.extend(items);
+        self
+    }
+}
+
+/// Standard menu actions that can be handled by the system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandardAction {
+    /// About menu item.
+    About,
+    /// Preferences/Settings.
+    Preferences,
+    /// Hide application.
+    Hide,
+    /// Hide other applications.
+    HideOthers,
+    /// Show all applications.
+    ShowAll,
+    /// Quit application.
+    Quit,
+    /// Undo action.
+    Undo,
+    /// Redo action.
+    Redo,
+    /// Cut to clipboard.
+    Cut,
+    /// Copy to clipboard.
+    Copy,
+    /// Paste from clipboard.
+    Paste,
+    /// Select all.
+    SelectAll,
+    /// Delete.
+    Delete,
+    /// Minimize window.
+    Minimize,
+    /// Zoom window.
+    Zoom,
+    /// Bring all windows to front.
+    BringAllToFront,
+    /// Close window.
+    Close,
+}
+
+/// Configuration for the native menu bar.
+#[derive(Clone, Default)]
+pub struct NativeMenuBar {
+    /// The application name (shown in the app menu).
+    pub app_name: Option<String>,
+    /// Custom menus to add.
+    pub menus: Vec<NativeMenu>,
+    /// Whether to include standard app menu items.
+    pub include_app_menu: bool,
+    /// Whether to include standard edit menu.
+    pub include_edit_menu: bool,
+    /// Whether to include standard window menu.
+    pub include_window_menu: bool,
+}
+
+impl NativeMenuBar {
+    /// Creates a new native menu bar configuration.
+    pub fn new() -> Self {
+        Self {
+            app_name: None,
+            menus: Vec::new(),
+            include_app_menu: true,
+            include_edit_menu: true,
+            include_window_menu: true,
+        }
+    }
+
+    /// Sets the application name.
+    pub fn app_name(mut self, name: impl Into<String>) -> Self {
+        self.app_name = Some(name.into());
+        self
+    }
+
+    /// Adds a custom menu.
+    pub fn add_menu(mut self, menu: NativeMenu) -> Self {
+        self.menus.push(menu);
+        self
+    }
+
+    /// Sets whether to include the standard app menu.
+    pub fn include_app_menu(mut self, include: bool) -> Self {
+        self.include_app_menu = include;
+        self
+    }
+
+    /// Sets whether to include the standard edit menu.
+    pub fn include_edit_menu(mut self, include: bool) -> Self {
+        self.include_edit_menu = include;
+        self
+    }
+
+    /// Sets whether to include the standard window menu.
+    pub fn include_window_menu(mut self, include: bool) -> Self {
+        self.include_window_menu = include;
+        self
+    }
+
+    /// Creates a File menu with common items.
+    pub fn file_menu(items: Vec<NativeMenuItem>) -> NativeMenu {
+        NativeMenu::with_items("File", items)
+    }
+
+    /// Creates a standard File menu with New, Open, Save, etc.
+    pub fn standard_file_menu() -> NativeMenu {
+        NativeMenu::with_items("File", vec![
+            NativeMenuItem::new("New").shortcut_cmd('n'),
+            NativeMenuItem::new("Open...").shortcut_cmd('o'),
+            NativeMenuItem::separator(),
+            NativeMenuItem::new("Save").shortcut_cmd('s'),
+            NativeMenuItem::new("Save As...").shortcut_cmd_shift('s'),
+            NativeMenuItem::separator(),
+            NativeMenuItem::new("Close").shortcut_cmd('w'),
+        ])
+    }
+
+    /// Creates a View menu.
+    pub fn view_menu(items: Vec<NativeMenuItem>) -> NativeMenu {
+        NativeMenu::with_items("View", items)
+    }
+
+    /// Creates a Help menu.
+    pub fn help_menu(items: Vec<NativeMenuItem>) -> NativeMenu {
+        NativeMenu::with_items("Help", items)
+    }
+}
+
+/// Global storage for the native menu bar configuration.
+static NATIVE_MENU_BAR: OnceLock<RwLock<Option<NativeMenuBar>>> = OnceLock::new();
+
+/// Sets the global native menu bar configuration.
+/// This should be called before App::run() to configure the menu bar.
+pub fn set_native_menu_bar(menu_bar: NativeMenuBar) {
+    let storage = NATIVE_MENU_BAR.get_or_init(|| RwLock::new(None));
+    *storage.write().unwrap() = Some(menu_bar);
+}
+
+/// Gets the current native menu bar configuration.
+pub fn get_native_menu_bar() -> Option<NativeMenuBar> {
+    NATIVE_MENU_BAR.get()
+        .and_then(|storage| storage.read().ok())
+        .and_then(|guard| guard.clone())
+}
+
+// =============================================================================
+// Factory Functions
+// =============================================================================
+
 /// Creates a menu.
 pub fn menu(items: Vec<MenuItem>) -> Menu {
     Menu::new(items)
@@ -563,4 +983,24 @@ pub fn menu_separator() -> MenuItem {
 /// Creates a popup.
 pub fn popup() -> Popup {
     Popup::new()
+}
+
+/// Creates a native menu item.
+pub fn native_menu_item(label: impl Into<String>) -> NativeMenuItem {
+    NativeMenuItem::new(label)
+}
+
+/// Creates a native menu item separator.
+pub fn native_separator() -> NativeMenuItem {
+    NativeMenuItem::separator()
+}
+
+/// Creates a native menu.
+pub fn native_menu(title: impl Into<String>) -> NativeMenu {
+    NativeMenu::new(title)
+}
+
+/// Creates a native menu bar configuration.
+pub fn native_menu_bar() -> NativeMenuBar {
+    NativeMenuBar::new()
 }

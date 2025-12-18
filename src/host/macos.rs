@@ -15,7 +15,7 @@ use objc2_foundation::{
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
     NSWindow, NSWindowStyleMask, NSCursor, NSPasteboard, NSView,
-    NSGraphicsContext, NSEvent,
+    NSGraphicsContext, NSEvent, NSMenu, NSMenuItem,
 };
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::context::CGContext;
@@ -222,7 +222,315 @@ impl MacOSApp {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-        Some(Self { app, mtm })
+        let macos_app = Self { app, mtm };
+        macos_app.setup_menu();
+
+        Some(macos_app)
+    }
+
+    /// Sets up the application menu bar based on configuration or defaults.
+    fn setup_menu(&self) {
+        use crate::element::menu::get_native_menu_bar;
+
+        // Check if there's a custom menu bar configuration
+        let config = get_native_menu_bar().unwrap_or_else(|| {
+            crate::element::menu::NativeMenuBar::new()
+        });
+
+        unsafe {
+            let main_menu = NSMenu::new(self.mtm);
+
+            // App menu (always included)
+            if config.include_app_menu {
+                self.add_app_menu(&main_menu);
+            }
+
+            // Custom menus (inserted before Edit)
+            for custom_menu in &config.menus {
+                self.add_custom_menu(&main_menu, custom_menu);
+            }
+
+            // Edit menu
+            if config.include_edit_menu {
+                self.add_edit_menu(&main_menu);
+            }
+
+            // Window menu
+            if config.include_window_menu {
+                self.add_window_menu(&main_menu);
+            }
+
+            self.app.setMainMenu(Some(&main_menu));
+        }
+    }
+
+    /// Adds the standard app menu.
+    unsafe fn add_app_menu(&self, main_menu: &NSMenu) {
+        let app_menu_item = NSMenuItem::new(self.mtm);
+        let app_menu = NSMenu::new(self.mtm);
+
+        // About item
+        let about_title = NSString::from_str("About");
+        let about_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &about_title,
+            Some(objc2::sel!(orderFrontStandardAboutPanel:)),
+            &NSString::from_str(""),
+        );
+        app_menu.addItem(&about_item);
+
+        app_menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+
+        // Services menu
+        let services_title = NSString::from_str("Services");
+        let services_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &services_title,
+            None,
+            &NSString::from_str(""),
+        );
+        let services_menu = NSMenu::initWithTitle(self.mtm.alloc(), &services_title);
+        services_item.setSubmenu(Some(&services_menu));
+        app_menu.addItem(&services_item);
+        self.app.setServicesMenu(Some(&services_menu));
+
+        app_menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+
+        // Hide item
+        let hide_title = NSString::from_str("Hide");
+        let hide_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &hide_title,
+            Some(objc2::sel!(hide:)),
+            &NSString::from_str("h"),
+        );
+        app_menu.addItem(&hide_item);
+
+        // Hide Others item
+        let hide_others_title = NSString::from_str("Hide Others");
+        let hide_others_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &hide_others_title,
+            Some(objc2::sel!(hideOtherApplications:)),
+            &NSString::from_str("h"),
+        );
+        hide_others_item.setKeyEquivalentModifierMask(
+            objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand
+            | objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagOption
+        );
+        app_menu.addItem(&hide_others_item);
+
+        // Show All item
+        let show_all_title = NSString::from_str("Show All");
+        let show_all_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &show_all_title,
+            Some(objc2::sel!(unhideAllApplications:)),
+            &NSString::from_str(""),
+        );
+        app_menu.addItem(&show_all_item);
+
+        app_menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+
+        // Quit item
+        let quit_title = NSString::from_str("Quit");
+        let quit_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &quit_title,
+            Some(objc2::sel!(terminate:)),
+            &NSString::from_str("q"),
+        );
+        app_menu.addItem(&quit_item);
+
+        app_menu_item.setSubmenu(Some(&app_menu));
+        main_menu.addItem(&app_menu_item);
+    }
+
+    /// Adds the standard edit menu.
+    unsafe fn add_edit_menu(&self, main_menu: &NSMenu) {
+        let edit_menu_item = NSMenuItem::new(self.mtm);
+        let edit_title = NSString::from_str("Edit");
+        let edit_menu = NSMenu::initWithTitle(self.mtm.alloc(), &edit_title);
+
+        // Undo
+        let undo_title = NSString::from_str("Undo");
+        let undo_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &undo_title,
+            Some(objc2::sel!(undo:)),
+            &NSString::from_str("z"),
+        );
+        edit_menu.addItem(&undo_item);
+
+        // Redo
+        let redo_title = NSString::from_str("Redo");
+        let redo_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &redo_title,
+            Some(objc2::sel!(redo:)),
+            &NSString::from_str("Z"),
+        );
+        edit_menu.addItem(&redo_item);
+
+        edit_menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+
+        // Cut
+        let cut_title = NSString::from_str("Cut");
+        let cut_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &cut_title,
+            Some(objc2::sel!(cut:)),
+            &NSString::from_str("x"),
+        );
+        edit_menu.addItem(&cut_item);
+
+        // Copy
+        let copy_title = NSString::from_str("Copy");
+        let copy_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &copy_title,
+            Some(objc2::sel!(copy:)),
+            &NSString::from_str("c"),
+        );
+        edit_menu.addItem(&copy_item);
+
+        // Paste
+        let paste_title = NSString::from_str("Paste");
+        let paste_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &paste_title,
+            Some(objc2::sel!(paste:)),
+            &NSString::from_str("v"),
+        );
+        edit_menu.addItem(&paste_item);
+
+        // Select All
+        let select_all_title = NSString::from_str("Select All");
+        let select_all_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &select_all_title,
+            Some(objc2::sel!(selectAll:)),
+            &NSString::from_str("a"),
+        );
+        edit_menu.addItem(&select_all_item);
+
+        edit_menu_item.setSubmenu(Some(&edit_menu));
+        main_menu.addItem(&edit_menu_item);
+    }
+
+    /// Adds the standard window menu.
+    unsafe fn add_window_menu(&self, main_menu: &NSMenu) {
+        let window_menu_item = NSMenuItem::new(self.mtm);
+        let window_title = NSString::from_str("Window");
+        let window_menu = NSMenu::initWithTitle(self.mtm.alloc(), &window_title);
+
+        // Minimize
+        let minimize_title = NSString::from_str("Minimize");
+        let minimize_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &minimize_title,
+            Some(objc2::sel!(performMiniaturize:)),
+            &NSString::from_str("m"),
+        );
+        window_menu.addItem(&minimize_item);
+
+        // Zoom
+        let zoom_title = NSString::from_str("Zoom");
+        let zoom_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &zoom_title,
+            Some(objc2::sel!(performZoom:)),
+            &NSString::from_str(""),
+        );
+        window_menu.addItem(&zoom_item);
+
+        window_menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+
+        // Bring All to Front
+        let bring_all_title = NSString::from_str("Bring All to Front");
+        let bring_all_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &bring_all_title,
+            Some(objc2::sel!(arrangeInFront:)),
+            &NSString::from_str(""),
+        );
+        window_menu.addItem(&bring_all_item);
+
+        window_menu_item.setSubmenu(Some(&window_menu));
+        main_menu.addItem(&window_menu_item);
+        self.app.setWindowsMenu(Some(&window_menu));
+    }
+
+    /// Adds a custom menu from NativeMenu configuration.
+    unsafe fn add_custom_menu(&self, main_menu: &NSMenu, custom_menu: &crate::element::menu::NativeMenu) {
+        let menu_item = NSMenuItem::new(self.mtm);
+        let title = NSString::from_str(&custom_menu.title);
+        let ns_menu = NSMenu::initWithTitle(self.mtm.alloc(), &title);
+
+        for item in &custom_menu.items {
+            self.add_native_menu_item(&ns_menu, item);
+        }
+
+        menu_item.setSubmenu(Some(&ns_menu));
+        main_menu.addItem(&menu_item);
+    }
+
+    /// Adds a native menu item to a menu.
+    unsafe fn add_native_menu_item(&self, menu: &NSMenu, item: &crate::element::menu::NativeMenuItem) {
+        if item.is_separator() {
+            menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+            return;
+        }
+
+        let title = NSString::from_str(&item.label);
+        let key_equiv = item.shortcut.as_ref()
+            .map(|s| s.key.to_string())
+            .unwrap_or_default();
+        let key_str = NSString::from_str(&key_equiv);
+
+        // For items with callbacks, we can't easily map to Objective-C selectors
+        // So for now, items without callbacks will have no action
+        let ns_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            self.mtm.alloc(),
+            &title,
+            None, // Custom callbacks require more complex setup
+            &key_str,
+        );
+
+        // Set modifier mask if there's a shortcut
+        if let Some(ref shortcut) = item.shortcut {
+            let mut mask = objc2_app_kit::NSEventModifierFlags::empty();
+            if shortcut.modifiers.command {
+                mask |= objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand;
+            }
+            if shortcut.modifiers.shift {
+                mask |= objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagShift;
+            }
+            if shortcut.modifiers.option {
+                mask |= objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagOption;
+            }
+            if shortcut.modifiers.control {
+                mask |= objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagControl;
+            }
+            ns_item.setKeyEquivalentModifierMask(mask);
+        }
+
+        // Set enabled state
+        if !item.enabled {
+            ns_item.setEnabled(false);
+        }
+
+        // Handle submenu
+        if let Some(ref submenu_items) = item.submenu {
+            let submenu_title = NSString::from_str(&item.label);
+            let submenu = NSMenu::initWithTitle(self.mtm.alloc(), &submenu_title);
+            for sub_item in submenu_items {
+                self.add_native_menu_item(&submenu, sub_item);
+            }
+            ns_item.setSubmenu(Some(&submenu));
+        }
+
+        menu.addItem(&ns_item);
     }
 
     /// Runs the application event loop.
@@ -452,18 +760,20 @@ impl MKView {
                     let temp_view = View::new(size);
                     let ctx = Context::new(&temp_view, &canvas_cell, bounds);
 
-                    // Clear focus from all elements before handling mouse down
-                    // This ensures text boxes and other focusable elements lose focus
-                    // when clicking elsewhere. Only do this on mouse down, not mouse up.
+                    // Handle the click first - this allows menus and other controls
+                    // to process the click before focus is cleared
+                    let handled = content.handle_click(&ctx, mouse_btn);
+
+                    // Clear focus from all elements on mouse down
+                    // This ensures text boxes lose focus when clicking elsewhere.
+                    // Note: Controls like TextBox will re-establish focus in handle_click
+                    // if they were the target of the click.
                     if down {
                         content.clear_focus();
                     }
 
-                    // Use handle_click for immutable click handling
-                    if content.handle_click(&ctx, mouse_btn) {
-                        // Trigger redraw after click
-                        self.setNeedsDisplay(true);
-                    }
+                    // Trigger redraw
+                    self.setNeedsDisplay(true);
                 }
             }
         }

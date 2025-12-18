@@ -5,6 +5,9 @@
 use mkgraphic::prelude::*;
 
 fn main() {
+    // Configure native menu bar before creating the app
+    setup_menu_bar();
+
     let mut app = App::new();
     let mut window = Window::new("Elements Gallery", Extent::new(900.0, 700.0));
 
@@ -101,4 +104,56 @@ fn create_gallery() -> impl Element {
 
 fn section_label(text: &str) -> impl Element {
     margin_top(15.0, margin_bottom(5.0, label(text).with_font_size(14.0)))
+}
+
+fn setup_menu_bar() {
+    // Configure the native menu bar with custom menus
+    set_native_menu_bar(
+        native_menu_bar()
+            .app_name("Elements Gallery")
+            // Add a custom File menu
+            .add_menu(native_menu("File")
+                .add_item(native_menu_item("New")
+                    .shortcut_cmd('n')
+                    .on_select(|| println!("File > New")))
+                .add_item(native_menu_item("Open...")
+                    .shortcut_cmd('o')
+                    .on_select(|| println!("File > Open")))
+                .add_item(native_separator())
+                .add_item(native_menu_item("Save")
+                    .shortcut_cmd('s')
+                    .on_select(|| println!("File > Save")))
+                .add_item(native_menu_item("Save As...")
+                    .shortcut(MenuShortcut::cmd_shift('s'))
+                    .on_select(|| println!("File > Save As")))
+                .add_item(native_separator())
+                .add_item(native_menu_item("Export...")
+                    .shortcut_cmd('e')
+                    .on_select(|| println!("File > Export"))))
+            // Add a custom View menu
+            .add_menu(native_menu("View")
+                .add_item(native_menu_item("Zoom In")
+                    .shortcut_cmd('+')
+                    .on_select(|| println!("View > Zoom In")))
+                .add_item(native_menu_item("Zoom Out")
+                    .shortcut_cmd('-')
+                    .on_select(|| println!("View > Zoom Out")))
+                .add_item(native_menu_item("Actual Size")
+                    .shortcut_cmd('0')
+                    .on_select(|| println!("View > Actual Size")))
+                .add_item(native_separator())
+                .add_item(native_menu_item("Toggle Sidebar")
+                    .shortcut(MenuShortcut::cmd_shift('s'))
+                    .on_select(|| println!("View > Toggle Sidebar"))))
+            // Add a custom Help menu
+            .add_menu(native_menu("Help")
+                .add_item(native_menu_item("Documentation")
+                    .on_select(|| println!("Help > Documentation")))
+                .add_item(native_menu_item("About Elements Gallery")
+                    .on_select(|| println!("Help > About"))))
+            // Include standard OS menus
+            .include_app_menu(true)
+            .include_edit_menu(true)
+            .include_window_menu(true)
+    );
 }

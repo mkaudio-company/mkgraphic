@@ -74,7 +74,12 @@ pub mod prelude {
         switch::{slide_switch, SlideSwitch},
         dial::{dial, dial_with_range, Dial},
         text_box::{text_box, TextBox},
-        menu::{menu, menu_item, menu_separator, popup, Menu, MenuItem, Popup},
+        menu::{
+            menu, menu_item, menu_separator, popup, Menu, MenuItem, Popup,
+            native_menu_item, native_separator, native_menu, native_menu_bar,
+            set_native_menu_bar, get_native_menu_bar,
+            NativeMenuItem, NativeMenu, NativeMenuBar, MenuShortcut, MenuModifiers, StandardAction,
+        },
         list::{list, dropdown, List, Dropdown, ListItem},
         grid::{grid, Grid},
         floating::{floating, Floating},
