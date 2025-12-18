@@ -6,7 +6,7 @@ use super::context::{BasicContext, Context};
 use super::composite::{Storage, CompositeBase, Composite};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::view::MouseButton;
+use crate::view::{MouseButton, KeyInfo, TextInfo};
 
 /// Layer element - stacks children on top of each other.
 ///
@@ -148,6 +148,62 @@ impl Element for Layer {
         false
     }
 
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        // Forward click to topmost child that accepts it
+        for i in (0..self.inner.len()).rev() {
+            if let Some(child) = self.inner.at(i) {
+                if child.handle_click(ctx, btn) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        for i in (0..self.inner.len()).rev() {
+            if let Some(child) = self.inner.at(i) {
+                if child.hit_test(ctx, btn.pos, false, false).is_some() {
+                    child.handle_drag(ctx, btn);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        for i in (0..self.inner.len()).rev() {
+            if let Some(child) = self.inner.at(i) {
+                if child.handle_key(ctx, k) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        for i in (0..self.inner.len()).rev() {
+            if let Some(child) = self.inner.at(i) {
+                if child.handle_text(ctx, info) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        for i in (0..self.inner.len()).rev() {
+            if let Some(child) = self.inner.at(i) {
+                if child.handle_scroll(ctx, dir, p) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn is_enabled(&self) -> bool {
         self.inner.is_enabled()
     }
@@ -170,6 +226,14 @@ impl Element for Layer {
 
     fn focus(&self) -> Option<&dyn Element> {
         self.inner.focus()
+    }
+
+    fn clear_focus(&self) {
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                child.clear_focus();
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -289,6 +353,44 @@ impl Element for Deck {
         }
     }
 
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.handle_click(ctx, btn)
+        } else {
+            false
+        }
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.handle_drag(ctx, btn);
+        }
+    }
+
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.handle_key(ctx, k)
+        } else {
+            false
+        }
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.handle_text(ctx, info)
+        } else {
+            false
+        }
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.handle_scroll(ctx, dir, p)
+        } else {
+            false
+        }
+    }
+
     fn is_enabled(&self) -> bool {
         self.inner.is_enabled()
     }
@@ -302,6 +404,14 @@ impl Element for Deck {
             child.wants_focus()
         } else {
             false
+        }
+    }
+
+    fn clear_focus(&self) {
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                child.clear_focus();
+            }
         }
     }
 

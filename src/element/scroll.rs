@@ -494,6 +494,10 @@ impl Element for ScrollView {
     }
 
     fn scroll(&mut self, ctx: &Context, dir: Point, _p: Point) -> bool {
+        self.handle_scroll(ctx, dir, _p)
+    }
+
+    fn handle_scroll(&self, _ctx: &Context, dir: Point, _p: Point) -> bool {
         let current = *self.scroll_offset.read().unwrap();
         let new_scroll = Point::new(
             current.x - dir.x * 20.0,

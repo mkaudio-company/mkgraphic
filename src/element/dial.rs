@@ -42,6 +42,10 @@ pub struct Dial {
     on_change: Option<DialChangeCallback>,
     drag_start_y: RwLock<f32>,
     drag_start_value: RwLock<f64>,
+    /// Center position for angular calculations (set during click)
+    dial_center: RwLock<Point>,
+    /// Starting angle when drag began
+    drag_start_angle: RwLock<f32>,
 }
 
 impl Dial {
@@ -64,7 +68,27 @@ impl Dial {
             on_change: None,
             drag_start_y: RwLock::new(0.0),
             drag_start_value: RwLock::new(0.0),
+            dial_center: RwLock::new(Point::new(0.0, 0.0)),
+            drag_start_angle: RwLock::new(0.0),
         }
+    }
+
+    /// Calculates the angle from dial center to a point.
+    /// Returns angle in radians, measured clockwise from top (12 o'clock).
+    fn angle_to_point(&self, center: Point, p: Point) -> f32 {
+        let dx = p.x - center.x;
+        let dy = p.y - center.y;
+        // atan2 gives angle from positive x-axis, counterclockwise
+        // We want angle from top (negative y-axis), clockwise
+        // So we use atan2(dx, -dy) to rotate the reference
+        dx.atan2(-dy)
+    }
+
+    /// Converts an angle to a normalized value (0.0 to 1.0).
+    fn angle_to_normalized(&self, angle: f32) -> f64 {
+        let angle_range = self.end_angle - self.start_angle;
+        let normalized = ((angle - self.start_angle) / angle_range) as f64;
+        normalized.clamp(0.0, 1.0)
     }
 
     /// Creates a dial with specified range.
@@ -309,8 +333,13 @@ impl Element for Dial {
         let mut state = self.state.write().unwrap();
         if btn.down {
             *state = DialState::Dragging;
+            // Store dial center for angular calculations
+            let center = ctx.bounds.center();
+            *self.dial_center.write().unwrap() = center;
             *self.drag_start_y.write().unwrap() = btn.pos.y;
             *self.drag_start_value.write().unwrap() = self.get_value();
+            // Store initial angle for relative angular movement
+            *self.drag_start_angle.write().unwrap() = self.angle_to_point(center, btn.pos);
         } else {
             *state = if ctx.bounds.contains(btn.pos) {
                 DialState::Hover
@@ -323,18 +352,35 @@ impl Element for Dial {
     }
 
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, _ctx: &Context, btn: MouseButton) {
         if !self.enabled {
             return;
         }
 
-        let drag_start_y = *self.drag_start_y.read().unwrap();
+        let center = *self.dial_center.read().unwrap();
+        let drag_start_angle = *self.drag_start_angle.read().unwrap();
         let drag_start_value = *self.drag_start_value.read().unwrap();
 
-        // Vertical drag controls value: up increases, down decreases
-        let delta_y = drag_start_y - btn.pos.y;
-        let sensitivity = 0.005; // Adjust for finer/coarser control
+        // Calculate current angle from center to mouse position
+        let current_angle = self.angle_to_point(center, btn.pos);
 
-        let delta_normalized = delta_y as f64 * sensitivity;
+        // Calculate angular delta
+        let mut angle_delta = current_angle - drag_start_angle;
+
+        // Handle wrap-around at ±π
+        if angle_delta > PI {
+            angle_delta -= 2.0 * PI;
+        } else if angle_delta < -PI {
+            angle_delta += 2.0 * PI;
+        }
+
+        // Convert angle delta to normalized value change
+        let angle_range = self.end_angle - self.start_angle;
+        let delta_normalized = (angle_delta / angle_range) as f64;
+
         let start_normalized = (drag_start_value - self.min_value) / (self.max_value - self.min_value);
         let new_normalized = (start_normalized + delta_normalized).clamp(0.0, 1.0);
 

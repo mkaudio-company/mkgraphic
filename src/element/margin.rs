@@ -145,17 +145,23 @@ impl<S: Element + 'static> Element for MarginElement<S> {
     }
 
     fn draw(&self, ctx: &Context) {
-        self.subject.draw(ctx);
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.draw(&adjusted_ctx);
     }
 
     fn layout(&mut self, ctx: &Context) {
-        self.subject.layout(ctx);
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.layout(&adjusted_ctx);
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
-        // Adjust point for margin
-        let adjusted_p = Point::new(p.x - self.margin.left, p.y - self.margin.top);
-        self.subject.hit_test(ctx, adjusted_p, leaf, control)
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        // Let the subject determine if it handles the point
+        // This allows popups/dropdowns that extend beyond bounds to receive hits
+        self.subject.hit_test(&adjusted_ctx, p, leaf, control)
     }
 
     fn wants_control(&self) -> bool {
@@ -163,19 +169,43 @@ impl<S: Element + 'static> Element for MarginElement<S> {
     }
 
     fn click(&mut self, ctx: &Context, btn: MouseButton) -> bool {
-        self.subject.click(ctx, btn)
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.click(&adjusted_ctx, btn)
+    }
+
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.handle_click(&adjusted_ctx, btn)
     }
 
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
-        self.subject.drag(ctx, btn);
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.drag(&adjusted_ctx, btn);
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.handle_drag(&adjusted_ctx, btn);
     }
 
     fn key(&mut self, ctx: &Context, k: KeyInfo) -> bool {
         self.subject.key(ctx, k)
     }
 
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        self.subject.handle_key(ctx, k)
+    }
+
     fn text(&mut self, ctx: &Context, info: TextInfo) -> bool {
         self.subject.text(ctx, info)
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        self.subject.handle_text(ctx, info)
     }
 
     fn cursor(&mut self, ctx: &Context, p: Point, status: CursorTracking) -> bool {
@@ -184,6 +214,12 @@ impl<S: Element + 'static> Element for MarginElement<S> {
 
     fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
         self.subject.scroll(ctx, dir, p)
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.handle_scroll(&adjusted_ctx, dir, p)
     }
 
     fn is_enabled(&self) -> bool {
@@ -212,6 +248,10 @@ impl<S: Element + 'static> Element for MarginElement<S> {
 
     fn focus_mut(&mut self) -> Option<&mut dyn Element> {
         self.subject.focus_mut()
+    }
+
+    fn clear_focus(&self) {
+        self.subject.clear_focus();
     }
 
     fn as_any(&self) -> &dyn Any {

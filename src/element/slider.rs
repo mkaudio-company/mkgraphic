@@ -353,6 +353,10 @@ impl Element for Slider {
     }
 
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
         if !self.enabled {
             return;
         }

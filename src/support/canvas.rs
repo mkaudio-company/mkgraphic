@@ -181,6 +181,7 @@ pub struct Canvas {
     save_stack: Vec<CanvasState>,
     current_font: Option<Font>,
     font_size: f32,
+    clip_rect: Option<Rect>,
 }
 
 struct CanvasState {
@@ -190,6 +191,7 @@ struct CanvasState {
     text_align: TextAlign,
     transform: tiny_skia::Transform,
     font_size: f32,
+    clip_rect: Option<Rect>,
 }
 
 impl Canvas {
@@ -207,6 +209,7 @@ impl Canvas {
             save_stack: Vec::new(),
             current_font: None,
             font_size: 12.0,
+            clip_rect: None,
         })
     }
 
@@ -223,6 +226,7 @@ impl Canvas {
             save_stack: Vec::new(),
             current_font: None,
             font_size: 12.0,
+            clip_rect: None,
         }
     }
 
@@ -404,17 +408,39 @@ impl Canvas {
         paint
     }
 
+    /// Creates a clip mask for the current clip_rect.
+    fn create_clip_mask(&self) -> Option<tiny_skia::Mask> {
+        self.clip_rect.and_then(|clip| {
+            let mut mask = tiny_skia::Mask::new(self.pixmap.width(), self.pixmap.height())?;
+            let clip_path = {
+                let mut pb = tiny_skia::PathBuilder::new();
+                pb.push_rect(
+                    tiny_skia::Rect::from_ltrb(clip.left, clip.top, clip.right, clip.bottom)?
+                );
+                pb.finish()?
+            };
+            mask.fill_path(
+                &clip_path,
+                tiny_skia::FillRule::Winding,
+                true,
+                tiny_skia::Transform::identity(),
+            );
+            Some(mask)
+        })
+    }
+
     /// Fills the current path.
     pub fn fill(&mut self) {
         if let Some(pb) = self.path_builder.take() {
             if let Some(path) = pb.finish() {
                 let paint = Self::color_to_paint(self.fill_color);
+                let clip_mask = self.create_clip_mask();
                 self.pixmap.fill_path(
                     &path,
                     &paint,
                     tiny_skia::FillRule::Winding,
                     self.transform,
-                    None,
+                    clip_mask.as_ref(),
                 );
             }
         }
@@ -425,12 +451,13 @@ impl Canvas {
         if let Some(ref pb) = self.path_builder {
             if let Some(path) = pb.clone().finish() {
                 let paint = Self::color_to_paint(self.fill_color);
+                let clip_mask = self.create_clip_mask();
                 self.pixmap.fill_path(
                     &path,
                     &paint,
                     tiny_skia::FillRule::Winding,
                     self.transform,
-                    None,
+                    clip_mask.as_ref(),
                 );
             }
         }
@@ -445,7 +472,8 @@ impl Canvas {
                     width: self.line_width,
                     ..Default::default()
                 };
-                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, None);
+                let clip_mask = self.create_clip_mask();
+                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
             }
         }
     }
@@ -459,7 +487,8 @@ impl Canvas {
                     width: self.line_width,
                     ..Default::default()
                 };
-                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, None);
+                let clip_mask = self.create_clip_mask();
+                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
             }
         }
     }
@@ -505,6 +534,7 @@ impl Canvas {
             text_align: self.text_align,
             transform: self.transform,
             font_size: self.font_size,
+            clip_rect: self.clip_rect,
         });
     }
 
@@ -517,7 +547,26 @@ impl Canvas {
             self.text_align = state.text_align;
             self.transform = state.transform;
             self.font_size = state.font_size;
+            self.clip_rect = state.clip_rect;
         }
+    }
+
+    /// Sets the clipping rectangle.
+    pub fn set_clip_rect(&mut self, rect: Option<Rect>) {
+        self.clip_rect = rect;
+    }
+
+    /// Gets the current clipping rectangle.
+    pub fn clip_rect(&self) -> Option<Rect> {
+        self.clip_rect
+    }
+
+    /// Intersects the current clip rect with the given rect.
+    pub fn clip(&mut self, rect: Rect) {
+        self.clip_rect = Some(match self.clip_rect {
+            Some(existing) => existing.intersection(rect).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+            None => rect,
+        });
     }
 
     // --- Font and text ---
@@ -537,16 +586,77 @@ impl Canvas {
         self.text_align = align;
     }
 
-    /// Measures text (placeholder - requires text shaping integration).
-    pub fn measure_text(&self, _text: &str) -> TextMetrics {
-        // TODO: Integrate with rustybuzz for text shaping
+    /// Measures text width using the font system.
+    pub fn measure_text(&self, text: &str) -> TextMetrics {
+        let width = self.text_width(text);
         TextMetrics {
             ascent: self.font_size * 0.8,
             descent: self.font_size * 0.2,
             leading: self.font_size * 0.1,
-            width: 0.0, // Would need actual text measurement
+            width,
             height: self.font_size,
         }
+    }
+
+    /// Returns the width of the given text in pixels.
+    pub fn text_width(&self, text: &str) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+
+        static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
+        let font_db = FONT_DB.get_or_init(FontDatabase::with_system_fonts);
+
+        let query = fontdb::Query {
+            families: &[fontdb::Family::SansSerif],
+            weight: fontdb::Weight(400),
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+
+        let Some(font_id) = font_db.inner().query(&query) else {
+            // Fallback: estimate width
+            return text.chars().count() as f32 * self.font_size * 0.6;
+        };
+
+        let mut total_width = 0.0f32;
+        font_db.inner().with_face_data(font_id, |font_data_ref, face_index| {
+            let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                return;
+            };
+
+            let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
+                return;
+            };
+
+            let mut buffer = rustybuzz::UnicodeBuffer::new();
+            buffer.push_str(text);
+            let output = rustybuzz::shape(&buzz_face, &[], buffer);
+
+            let units_per_em = face.units_per_em() as f32;
+            let scale = self.font_size / units_per_em;
+
+            for pos in output.glyph_positions() {
+                total_width += (pos.x_advance as f32) * scale;
+            }
+        });
+
+        if total_width == 0.0 {
+            // Fallback if measurement failed
+            text.chars().count() as f32 * self.font_size * 0.6
+        } else {
+            total_width
+        }
+    }
+
+    /// Returns the width of a substring (for cursor positioning).
+    pub fn text_width_to_position(&self, text: &str, char_position: usize) -> f32 {
+        if char_position == 0 || text.is_empty() {
+            return 0.0;
+        }
+
+        let prefix: String = text.chars().take(char_position).collect();
+        self.text_width(&prefix)
     }
 
     /// Fills text at the given position.
@@ -603,6 +713,7 @@ impl Canvas {
                 let glyph_y = y_pos + (pos.y_offset as f32) * scale;
 
                 // Render the glyph using outline
+                let clip_mask = self.create_clip_mask();
                 Self::render_glyph_static(
                     &mut self.pixmap,
                     &face,
@@ -612,6 +723,7 @@ impl Canvas {
                     scale,
                     self.fill_color,
                     self.transform,
+                    clip_mask.as_ref(),
                 );
 
                 // Advance position
@@ -707,6 +819,7 @@ impl Canvas {
         scale: f32,
         fill_color: Color,
         transform: tiny_skia::Transform,
+        clip_mask: Option<&tiny_skia::Mask>,
     ) {
         struct GlyphOutlineBuilder {
             path: tiny_skia::PathBuilder,
@@ -766,7 +879,7 @@ impl Canvas {
                     &paint,
                     tiny_skia::FillRule::Winding,
                     transform,
-                    None,
+                    clip_mask,
                 );
             }
         }

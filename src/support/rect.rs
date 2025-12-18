@@ -237,6 +237,23 @@ impl Rect {
             Axis::Y => &mut self.bottom,
         }
     }
+
+    /// Returns the intersection with another rectangle.
+    #[inline]
+    pub fn intersection(&self, other: Rect) -> Option<Rect> {
+        let r = Rect {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+
+        if r.is_valid() && !r.is_empty() {
+            Some(r)
+        } else {
+            None
+        }
+    }
 }
 
 /// Returns true if two rectangles intersect.

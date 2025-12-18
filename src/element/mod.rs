@@ -244,6 +244,9 @@ pub trait Element: Send + Sync + Any {
     /// Handles mouse drag events.
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {}
 
+    /// Handles mouse drag events (immutable version for use with Arc).
+    fn handle_drag(&self, _ctx: &Context, _btn: MouseButton) {}
+
     /// Handles keyboard events.
     ///
     /// Returns true if the event was handled.
@@ -251,10 +254,20 @@ pub trait Element: Send + Sync + Any {
         false
     }
 
+    /// Handles keyboard events (immutable version for use with Arc).
+    fn handle_key(&self, _ctx: &Context, _k: KeyInfo) -> bool {
+        false
+    }
+
     /// Handles text input events.
     ///
     /// Returns true if the event was handled.
     fn text(&mut self, ctx: &Context, info: TextInfo) -> bool {
+        false
+    }
+
+    /// Handles text input events (immutable version for use with Arc).
+    fn handle_text(&self, _ctx: &Context, _info: TextInfo) -> bool {
         false
     }
 
@@ -269,6 +282,11 @@ pub trait Element: Send + Sync + Any {
     ///
     /// Returns true if the event was handled.
     fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
+        false
+    }
+
+    /// Handles scroll events (immutable version for use with Arc).
+    fn handle_scroll(&self, _ctx: &Context, _dir: Point, _p: Point) -> bool {
         false
     }
 
@@ -306,6 +324,10 @@ pub trait Element: Send + Sync + Any {
     fn focus_mut(&mut self) -> Option<&mut dyn Element> {
         None
     }
+
+    /// Clears focus from this element and all children (immutable version).
+    /// This is used when clicking elsewhere to unfocus text inputs, etc.
+    fn clear_focus(&self) {}
 
     // --- Drag and Drop ---
 

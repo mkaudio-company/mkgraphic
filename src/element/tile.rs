@@ -175,35 +175,90 @@ impl Element for VTile {
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
-        if !ctx.bounds.contains(p) {
-            return None;
-        }
-
+        // First check all children - some may have popups extending beyond bounds
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
-            if bounds.contains(p) {
-                if let Some(child) = self.inner.at(i) {
-                    let child_ctx = ctx.with_bounds(bounds);
-                    if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
-                        return Some(hit);
-                    }
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
+                    return Some(hit);
                 }
             }
         }
 
-        if leaf { None } else { Some(self) }
+        // If point is within our bounds but no child handled it
+        if ctx.bounds.contains(p) {
+            if leaf { None } else { Some(self) }
+        } else {
+            None
+        }
     }
 
     fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
-        // Find child at click position and forward the click
+        // Only forward to child that passes hit_test for this position
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
-            if bounds.contains(btn.pos) {
-                if let Some(child) = self.inner.at(i) {
-                    let child_ctx = ctx.with_bounds(bounds);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                // Check if this child wants the click via hit_test
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
                     if child.handle_click(&child_ctx, btn) {
                         return true;
                     }
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: crate::view::MouseButton) {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
+                    child.handle_drag(&child_ctx, btn);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: crate::support::point::Point, p: crate::support::point::Point) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.hit_test(&child_ctx, p, false, false).is_some() {
+                    if child.handle_scroll(&child_ctx, dir, p) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_key(&self, ctx: &Context, k: crate::view::KeyInfo) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.handle_key(&child_ctx, k) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_text(&self, ctx: &Context, info: crate::view::TextInfo) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.handle_text(&child_ctx, info) {
+                    return true;
                 }
             }
         }
@@ -236,6 +291,14 @@ impl Element for VTile {
 
     fn focus(&self) -> Option<&dyn Element> {
         self.inner.focus()
+    }
+
+    fn clear_focus(&self) {
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                child.clear_focus();
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -405,35 +468,90 @@ impl Element for HTile {
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
-        if !ctx.bounds.contains(p) {
-            return None;
-        }
-
+        // First check all children - some may have popups extending beyond bounds
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
-            if bounds.contains(p) {
-                if let Some(child) = self.inner.at(i) {
-                    let child_ctx = ctx.with_bounds(bounds);
-                    if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
-                        return Some(hit);
-                    }
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if let Some(hit) = child.hit_test(&child_ctx, p, leaf, control) {
+                    return Some(hit);
                 }
             }
         }
 
-        if leaf { None } else { Some(self) }
+        // If point is within our bounds but no child handled it
+        if ctx.bounds.contains(p) {
+            if leaf { None } else { Some(self) }
+        } else {
+            None
+        }
     }
 
     fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
-        // Find child at click position and forward the click
+        // Only forward to child that passes hit_test for this position
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
-            if bounds.contains(btn.pos) {
-                if let Some(child) = self.inner.at(i) {
-                    let child_ctx = ctx.with_bounds(bounds);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                // Check if this child wants the click via hit_test
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
                     if child.handle_click(&child_ctx, btn) {
                         return true;
                     }
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: crate::view::MouseButton) {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
+                    child.handle_drag(&child_ctx, btn);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: crate::support::point::Point, p: crate::support::point::Point) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.hit_test(&child_ctx, p, false, false).is_some() {
+                    if child.handle_scroll(&child_ctx, dir, p) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_key(&self, ctx: &Context, k: crate::view::KeyInfo) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.handle_key(&child_ctx, k) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn handle_text(&self, ctx: &Context, info: crate::view::TextInfo) -> bool {
+        for i in 0..self.inner.len() {
+            let bounds = self.bounds_of(ctx, i);
+            if let Some(child) = self.inner.at(i) {
+                let child_ctx = ctx.with_bounds(bounds);
+                if child.handle_text(&child_ctx, info) {
+                    return true;
                 }
             }
         }
@@ -466,6 +584,14 @@ impl Element for HTile {
 
     fn focus(&self) -> Option<&dyn Element> {
         self.inner.focus()
+    }
+
+    fn clear_focus(&self) {
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                child.clear_focus();
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {

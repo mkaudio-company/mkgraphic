@@ -71,6 +71,10 @@ impl<S: Element + 'static> Element for HAlign<S> {
         self.subject.click(ctx, btn)
     }
 
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        self.subject.handle_click(ctx, btn)
+    }
+
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
         self.subject.drag(ctx, btn);
     }
@@ -89,6 +93,22 @@ impl<S: Element + 'static> Element for HAlign<S> {
 
     fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
         self.subject.scroll(ctx, dir, p)
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        self.subject.handle_drag(ctx, btn);
+    }
+
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        self.subject.handle_key(ctx, k)
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        self.subject.handle_text(ctx, info)
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        self.subject.handle_scroll(ctx, dir, p)
     }
 
     fn is_enabled(&self) -> bool {
@@ -117,6 +137,10 @@ impl<S: Element + 'static> Element for HAlign<S> {
 
     fn focus_mut(&mut self) -> Option<&mut dyn Element> {
         self.subject.focus_mut()
+    }
+
+    fn clear_focus(&self) {
+        self.subject.clear_focus();
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -185,6 +209,10 @@ impl<S: Element + 'static> Element for VAlign<S> {
         self.subject.click(ctx, btn)
     }
 
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        self.subject.handle_click(ctx, btn)
+    }
+
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
         self.subject.drag(ctx, btn);
     }
@@ -203,6 +231,22 @@ impl<S: Element + 'static> Element for VAlign<S> {
 
     fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
         self.subject.scroll(ctx, dir, p)
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        self.subject.handle_drag(ctx, btn);
+    }
+
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        self.subject.handle_key(ctx, k)
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        self.subject.handle_text(ctx, info)
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        self.subject.handle_scroll(ctx, dir, p)
     }
 
     fn is_enabled(&self) -> bool {
@@ -231,6 +275,10 @@ impl<S: Element + 'static> Element for VAlign<S> {
 
     fn focus_mut(&mut self) -> Option<&mut dyn Element> {
         self.subject.focus_mut()
+    }
+
+    fn clear_focus(&self) {
+        self.subject.clear_focus();
     }
 
     fn as_any(&self) -> &dyn Any {

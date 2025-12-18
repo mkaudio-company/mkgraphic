@@ -290,6 +290,31 @@ declare_class!(
             self.handle_mouse_event(event, false);
         }
 
+        #[method(mouseDragged:)]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.handle_mouse_drag(event);
+        }
+
+        #[method(rightMouseDragged:)]
+        fn right_mouse_dragged(&self, event: &NSEvent) {
+            self.handle_mouse_drag(event);
+        }
+
+        #[method(scrollWheel:)]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            self.handle_scroll(event);
+        }
+
+        #[method(keyDown:)]
+        fn key_down(&self, event: &NSEvent) {
+            self.handle_key_event(event, true);
+        }
+
+        #[method(keyUp:)]
+        fn key_up(&self, event: &NSEvent) {
+            self.handle_key_event(event, false);
+        }
+
         #[method(drawRect:)]
         fn draw_rect(&self, _dirty_rect: NSRect) {
             let ivars = self.ivars();
@@ -427,10 +452,182 @@ impl MKView {
                     let temp_view = View::new(size);
                     let ctx = Context::new(&temp_view, &canvas_cell, bounds);
 
+                    // Clear focus from all elements before handling mouse down
+                    // This ensures text boxes and other focusable elements lose focus
+                    // when clicking elsewhere. Only do this on mouse down, not mouse up.
+                    if down {
+                        content.clear_focus();
+                    }
+
                     // Use handle_click for immutable click handling
                     if content.handle_click(&ctx, mouse_btn) {
                         // Trigger redraw after click
                         self.setNeedsDisplay(true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_mouse_drag(&self, event: &NSEvent) {
+        unsafe {
+            let location_in_window = event.locationInWindow();
+            let location = self.convertPoint_fromView(location_in_window, None);
+            let pos = ns_point_to_point(location);
+
+            let button_number = event.buttonNumber();
+            let button_kind = match button_number {
+                0 => MouseButtonKind::Left,
+                1 => MouseButtonKind::Right,
+                2 => MouseButtonKind::Middle,
+                _ => MouseButtonKind::Left,
+            };
+
+            let mouse_btn = MouseButton {
+                down: true,
+                click_count: 1,
+                button: button_kind,
+                modifiers: translate_flags(event.modifierFlags().bits() as usize),
+                pos,
+            };
+
+            let ivars = self.ivars();
+            let size = *ivars.size.borrow();
+
+            // For drag, we need mutable access to the content
+            // We use a RwLock pattern here through the ElementPtr (Arc<RwLock<dyn Element>>)
+            let content_ref = ivars.content.borrow();
+            if let Some(ref content) = *content_ref {
+                let bounds = Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: size.x,
+                    bottom: size.y,
+                };
+
+                if let Some(dummy_canvas) = Canvas::new(1, 1) {
+                    let canvas_cell = RefCell::new(dummy_canvas);
+                    let temp_view = View::new(size);
+                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                    // Call handle_drag on the content (immutable version)
+                    content.handle_drag(&ctx, mouse_btn);
+                    self.setNeedsDisplay(true);
+                }
+            }
+        }
+    }
+
+    fn handle_scroll(&self, event: &NSEvent) {
+        unsafe {
+            let location_in_window = event.locationInWindow();
+            let location = self.convertPoint_fromView(location_in_window, None);
+            let pos = ns_point_to_point(location);
+
+            let delta_x = event.scrollingDeltaX() as f32;
+            let delta_y = event.scrollingDeltaY() as f32;
+            let dir = Point::new(delta_x, delta_y);
+
+            let ivars = self.ivars();
+            let size = *ivars.size.borrow();
+            let content_ref = ivars.content.borrow();
+
+            if let Some(ref content) = *content_ref {
+                let bounds = Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: size.x,
+                    bottom: size.y,
+                };
+
+                if let Some(dummy_canvas) = Canvas::new(1, 1) {
+                    let canvas_cell = RefCell::new(dummy_canvas);
+                    let temp_view = View::new(size);
+                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                    if content.handle_scroll(&ctx, dir, pos) {
+                        self.setNeedsDisplay(true);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_key_event(&self, event: &NSEvent, down: bool) {
+        unsafe {
+            use crate::view::{KeyInfo, KeyAction};
+
+            let keycode = event.keyCode();
+            let key = translate_key(keycode);
+            let modifiers = translate_flags(event.modifierFlags().bits() as usize);
+
+            let action = if down { KeyAction::Press } else { KeyAction::Release };
+
+            let key_info = KeyInfo {
+                key,
+                action,
+                modifiers,
+            };
+
+            let ivars = self.ivars();
+            let size = *ivars.size.borrow();
+            let content_ref = ivars.content.borrow();
+
+            if let Some(ref content) = *content_ref {
+                let bounds = Rect {
+                    left: 0.0,
+                    top: 0.0,
+                    right: size.x,
+                    bottom: size.y,
+                };
+
+                if let Some(dummy_canvas) = Canvas::new(1, 1) {
+                    let canvas_cell = RefCell::new(dummy_canvas);
+                    let temp_view = View::new(size);
+                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                    if content.handle_key(&ctx, key_info) {
+                        self.setNeedsDisplay(true);
+                    }
+                }
+            }
+
+            // Also handle text input for keyDown events
+            if down {
+                if let Some(characters) = event.characters() {
+                    let text: String = characters.to_string();
+                    if !text.is_empty() {
+                        for c in text.chars() {
+                            // Skip control characters
+                            if c.is_control() && c != '\n' && c != '\t' {
+                                continue;
+                            }
+
+                            let text_info = crate::view::TextInfo {
+                                codepoint: c,
+                                modifiers,
+                            };
+
+                            let content_ref = ivars.content.borrow();
+                            if let Some(ref content) = *content_ref {
+                                let bounds = Rect {
+                                    left: 0.0,
+                                    top: 0.0,
+                                    right: size.x,
+                                    bottom: size.y,
+                                };
+
+                                if let Some(dummy_canvas) = Canvas::new(1, 1) {
+                                    let canvas_cell = RefCell::new(dummy_canvas);
+                                    let temp_view = View::new(size);
+                                    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+                                    if content.handle_text(&ctx, text_info) {
+                                        self.setNeedsDisplay(true);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

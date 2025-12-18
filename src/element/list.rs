@@ -224,8 +224,8 @@ impl List {
         for (i, item) in items.iter().enumerate() {
             let bounds = self.item_bounds(ctx, i);
 
-            // Skip if outside visible area
-            if bounds.bottom < ctx.bounds.top || bounds.top > ctx.bounds.bottom {
+            // Skip if completely outside visible area (optimization)
+            if bounds.bottom < ctx.bounds.top - self.item_height || bounds.top > ctx.bounds.bottom + self.item_height {
                 continue;
             }
 
@@ -305,7 +305,28 @@ impl Element for List {
 
     fn draw(&self, ctx: &Context) {
         self.draw_background(ctx);
+
+        // Set clip rect for items (inset to account for corner radius)
+        {
+            let mut canvas = ctx.canvas.borrow_mut();
+            canvas.save();
+            let clip_bounds = Rect::new(
+                ctx.bounds.left + self.corner_radius,
+                ctx.bounds.top + self.corner_radius,
+                ctx.bounds.right - self.corner_radius,
+                ctx.bounds.bottom - self.corner_radius,
+            );
+            canvas.clip(clip_bounds);
+        }
+
         self.draw_items(ctx);
+
+        // Restore canvas state (removes clipping)
+        {
+            let mut canvas = ctx.canvas.borrow_mut();
+            canvas.restore();
+        }
+
         self.draw_scrollbar(ctx);
     }
 
@@ -375,6 +396,10 @@ impl Element for List {
     }
 
     fn scroll(&mut self, ctx: &Context, dir: Point, _p: Point) -> bool {
+        self.handle_scroll(ctx, dir, _p)
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, _p: Point) -> bool {
         if !self.enabled {
             return false;
         }
@@ -683,12 +708,7 @@ impl Element for Dropdown {
 
         let expanded = *self.expanded.read().unwrap();
 
-        if ctx.bounds.contains(btn.pos) {
-            // Toggle dropdown
-            *self.expanded.write().unwrap() = !expanded;
-            return true;
-        }
-
+        // Check dropdown area FIRST when expanded (dropdown is below button)
         if expanded {
             let dropdown_rect = self.dropdown_bounds(ctx);
             if dropdown_rect.contains(btn.pos) {
@@ -705,7 +725,15 @@ impl Element for Dropdown {
                 }
                 return true;
             }
+        }
 
+        if ctx.bounds.contains(btn.pos) {
+            // Toggle dropdown
+            *self.expanded.write().unwrap() = !expanded;
+            return true;
+        }
+
+        if expanded {
             // Click outside closes dropdown
             *self.expanded.write().unwrap() = false;
         }

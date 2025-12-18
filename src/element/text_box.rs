@@ -396,13 +396,14 @@ impl TextBox {
 
         let mut canvas = ctx.canvas.borrow_mut();
         let display = self.display_text();
-        let char_width = self.font_size * 0.6;
 
         let start = sel_start.min(cursor_pos);
         let end = sel_start.max(cursor_pos);
 
-        let x1 = ctx.bounds.left + self.padding + start as f32 * char_width;
-        let x2 = ctx.bounds.left + self.padding + end as f32 * char_width;
+        // Measure text width up to start and end positions
+        canvas.font_size(self.font_size);
+        let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
+        let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, end);
 
         let sel_rect = Rect::new(
             x1,
@@ -423,9 +424,11 @@ impl TextBox {
 
         let mut canvas = ctx.canvas.borrow_mut();
         let cursor_pos = *self.cursor_pos.read().unwrap();
-        let char_width = self.font_size * 0.6;
+        let display = self.display_text();
 
-        let x = ctx.bounds.left + self.padding + cursor_pos as f32 * char_width;
+        // Measure text width up to cursor position
+        canvas.font_size(self.font_size);
+        let x = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, cursor_pos);
         let y1 = ctx.bounds.top + 4.0;
         let y2 = ctx.bounds.bottom - 4.0;
 
@@ -485,6 +488,13 @@ impl Element for TextBox {
         true
     }
 
+    fn clear_focus(&self) {
+        let mut state = self.state.write().unwrap();
+        if *state == TextBoxState::Focused {
+            *state = TextBoxState::Idle;
+        }
+    }
+
     fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
         if !self.enabled || btn.button != MouseButtonKind::Left {
             return false;
@@ -510,6 +520,10 @@ impl Element for TextBox {
     }
 
     fn key(&mut self, _ctx: &Context, k: KeyInfo) -> bool {
+        self.handle_key(_ctx, k)
+    }
+
+    fn handle_key(&self, _ctx: &Context, k: KeyInfo) -> bool {
         if !self.enabled {
             return false;
         }
@@ -574,6 +588,10 @@ impl Element for TextBox {
     }
 
     fn text(&mut self, _ctx: &Context, info: TextInfo) -> bool {
+        self.handle_text(_ctx, info)
+    }
+
+    fn handle_text(&self, _ctx: &Context, info: TextInfo) -> bool {
         if !self.enabled {
             return false;
         }
