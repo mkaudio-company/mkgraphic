@@ -11,14 +11,11 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
-use x11rb::protocol::xproto::ConnectionExt;
+use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
-use crate::support::point::{Point, Extent};
-use crate::view::{
-    View, BaseView, MouseButton, MouseButtonKind, KeyCode, KeyAction, KeyInfo,
-    TextInfo, CursorTracking, CursorType, DropInfo,
-};
+use crate::support::point::Extent;
+use crate::view::{View, KeyCode};
 
 /// Translates an X11 keycode to our KeyCode enum.
 pub fn translate_key(keycode: u8) -> KeyCode {
