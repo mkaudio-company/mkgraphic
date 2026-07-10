@@ -42,61 +42,59 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-pub mod support;
 pub mod element;
-pub mod view;
 pub mod host;
+pub mod support;
+pub mod view;
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::support::{
-        point::{Point, Extent, Axis},
-        rect::Rect,
-        color::{Color, colors},
-        canvas::Canvas,
-    };
     pub use crate::element::{
-        Element, ElementPtr, WeakElementPtr,
-        ViewLimits, ViewStretch,
-        share,
-        context::{BasicContext, Context},
-        proxy::Proxy,
-        composite::{Composite, CompositeBase},
-        tile::{vtile, htile, VTile, HTile},
         align::*,
-        margin::*,
-        size::*,
-        layer::*,
-        label::{label, Label},
         button::{button, BasicButton},
-        slider::{slider, vslider, Slider, SliderOrientation},
-        checkbox::{checkbox, Checkbox, radio_button, RadioButton, RadioGroup},
-        switch::{slide_switch, SlideSwitch},
+        checkbox::{checkbox, radio_button, Checkbox, RadioButton, RadioGroup},
+        composite::{Composite, CompositeBase},
+        context::{BasicContext, Context},
         dial::{dial, dial_with_range, Dial},
-        text_box::{text_box, TextBox},
-        menu::{
-            menu, menu_item, menu_separator, popup, Menu, MenuItem, Popup,
-            native_menu_item, native_separator, native_menu, native_menu_bar,
-            set_native_menu_bar, get_native_menu_bar,
-            NativeMenuItem, NativeMenu, NativeMenuBar, MenuShortcut, MenuModifiers, StandardAction,
-        },
-        list::{list, dropdown, List, Dropdown, ListItem},
-        grid::{grid, Grid},
         floating::{floating, Floating},
-        status_bar::{status_bar, StatusBar, StatusSegment},
-        thumbwheel::{thumbwheel, Thumbwheel},
+        grid::{grid, Grid},
+        label::{label, Label},
+        layer::*,
+        list::{dropdown, list, Dropdown, List, ListItem},
+        margin::*,
+        menu::{
+            get_native_menu_bar, menu, menu_item, menu_separator, native_menu, native_menu_bar,
+            native_menu_item, native_separator, popup, set_native_menu_bar, Menu, MenuItem,
+            MenuModifiers, MenuShortcut, NativeMenu, NativeMenuBar, NativeMenuItem, Popup,
+            StandardAction,
+        },
+        progress::{
+            circular_progress, indeterminate_progress, progress_bar, ProgressBar, ProgressStyle,
+        },
+        proxy::Proxy,
         scroll::{scroll_view, ScrollView},
-        tabs::{tab_bar, TabBar, Tab},
+        share,
+        size::*,
+        slider::{slider, vslider, Slider, SliderOrientation},
+        status_bar::{status_bar, StatusBar, StatusSegment},
+        switch::{slide_switch, SlideSwitch},
+        tabs::{tab_bar, Tab, TabBar},
+        text_box::{text_box, TextBox},
+        thumbwheel::{thumbwheel, Thumbwheel},
+        tile::{htile, vtile, HTile, VTile},
         tooltip::{tooltip, Tooltip},
-        progress::{progress_bar, circular_progress, indeterminate_progress, ProgressBar, ProgressStyle},
-    };
-    pub use crate::view::{
-        View, BaseView,
-        MouseButton, MouseButtonState,
-        KeyCode, KeyAction, KeyInfo,
-        CursorTracking, CursorType,
-        TextInfo, DropInfo,
+        Element, ElementPtr, ViewLimits, ViewStretch, WeakElementPtr,
     };
     pub use crate::host::{App, Window};
-    pub use crate::{vtile, htile};
+    pub use crate::support::{
+        canvas::Canvas,
+        color::{colors, Color},
+        point::{Axis, Extent, Point},
+        rect::Rect,
+    };
+    pub use crate::view::{
+        BaseView, CursorTracking, CursorType, DropInfo, KeyAction, KeyCode, KeyInfo, MouseButton,
+        MouseButtonState, TextInfo, View,
+    };
+    pub use crate::{htile, vtile};
 }

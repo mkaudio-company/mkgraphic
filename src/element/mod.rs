@@ -26,37 +26,37 @@
 //! - [`tooltip`]: Tooltip element
 //! - [`progress`]: Progress bar element
 
-pub mod context;
-pub mod proxy;
-pub mod composite;
-pub mod tile;
 pub mod align;
-pub mod margin;
-pub mod size;
-pub mod layer;
-pub mod label;
 pub mod button;
-pub mod slider;
 pub mod checkbox;
-pub mod switch;
+pub mod composite;
+pub mod context;
 pub mod dial;
-pub mod text_box;
-pub mod menu;
-pub mod list;
-pub mod grid;
 pub mod floating;
-pub mod status_bar;
-pub mod thumbwheel;
-pub mod scroll;
-pub mod tabs;
-pub mod tooltip;
+pub mod grid;
+pub mod label;
+pub mod layer;
+pub mod list;
+pub mod margin;
+pub mod menu;
 pub mod progress;
+pub mod proxy;
+pub mod scroll;
+pub mod size;
+pub mod slider;
+pub mod status_bar;
+pub mod switch;
+pub mod tabs;
+pub mod text_box;
+pub mod thumbwheel;
+pub mod tile;
+pub mod tooltip;
 
-use std::sync::{Arc, Weak};
 use std::any::Any;
+use std::sync::{Arc, Weak};
 
-use crate::support::point::{Point, Axis};
-use crate::view::{MouseButton, KeyInfo, TextInfo, DropInfo, CursorTracking};
+use crate::support::point::{Axis, Point};
+use crate::view::{CursorTracking, DropInfo, KeyInfo, MouseButton, TextInfo};
 
 /// The maximum extent value (effectively infinite).
 pub const FULL_EXTENT: f32 = 1e30;
@@ -393,6 +393,6 @@ pub fn empty() -> Empty {
 }
 
 // Re-exports
+pub use composite::{Composite, CompositeBase, Storage};
 pub use context::{BasicContext, Context};
 pub use proxy::{Proxy, ProxyBase};
-pub use composite::{Composite, CompositeBase, Storage};

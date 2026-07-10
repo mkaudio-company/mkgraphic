@@ -1,15 +1,15 @@
 //! Button elements for user interaction.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ViewLimits};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits};
+use crate::support::canvas::CornerRadii;
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
-use crate::support::canvas::CornerRadii;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, CursorTracking};
+use crate::view::{CursorTracking, MouseButton};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Button state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -160,7 +160,13 @@ impl Element for BasicButton {
         self.draw_label(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {

@@ -1,12 +1,12 @@
 //! Label elements for displaying text.
 
-use std::any::Any;
-use super::{Element, ViewLimits};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits};
 use crate::support::color::Color;
 use crate::support::font::Font;
 use crate::support::point::Point;
 use crate::support::theme::get_theme;
+use std::any::Any;
 
 /// A simple text label element.
 pub struct Label {
@@ -93,10 +93,7 @@ impl Element for Label {
         canvas.font(self.font.clone());
         canvas.font_size(self.font_size);
         // Position text with baseline offset (ascent is roughly 80% of font size)
-        let text_pos = Point::new(
-            ctx.bounds.left,
-            ctx.bounds.top + self.font_size * 0.8,
-        );
+        let text_pos = Point::new(ctx.bounds.left, ctx.bounds.top + self.font_size * 0.8);
         canvas.fill_text(&self.text, text_pos);
     }
 
@@ -197,10 +194,7 @@ impl Element for StaticText {
         canvas.fill_style(self.color);
         canvas.font_size(self.font_size);
         // Position text with baseline offset (ascent is roughly 80% of font size)
-        let text_pos = Point::new(
-            ctx.bounds.left,
-            ctx.bounds.top + self.font_size * 0.8,
-        );
+        let text_pos = Point::new(ctx.bounds.left, ctx.bounds.top + self.font_size * 0.8);
         canvas.fill_text(self.text, text_pos);
     }
 

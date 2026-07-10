@@ -1,6 +1,6 @@
 //! Point and extent types for 2D coordinates.
 
-use std::ops::{Add, Sub, Mul, Div, Neg, Index, IndexMut};
+use std::ops::{Add, Div, Index, IndexMut, Mul, Neg, Sub};
 
 /// Represents an axis in 2D space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -193,7 +193,10 @@ impl Extent {
     /// Creates a new extent.
     #[inline]
     pub const fn new(width: f32, height: f32) -> Self {
-        Self { x: width, y: height }
+        Self {
+            x: width,
+            y: height,
+        }
     }
 
     /// Creates a zero extent.
@@ -246,14 +249,20 @@ impl IndexMut<Axis> for Extent {
 impl From<Point> for Extent {
     #[inline]
     fn from(point: Point) -> Self {
-        Self { x: point.x, y: point.y }
+        Self {
+            x: point.x,
+            y: point.y,
+        }
     }
 }
 
 impl From<Extent> for Point {
     #[inline]
     fn from(extent: Extent) -> Self {
-        Self { x: extent.x, y: extent.y }
+        Self {
+            x: extent.x,
+            y: extent.y,
+        }
     }
 }
 

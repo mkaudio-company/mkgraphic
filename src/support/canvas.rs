@@ -5,11 +5,11 @@
 
 use std::sync::OnceLock;
 
+use super::circle::Circle;
 use super::color::Color;
+use super::font::{Font, FontDatabase};
 use super::point::Point;
 use super::rect::Rect;
-use super::circle::Circle;
-use super::font::{Font, FontDatabase};
 
 /// Text alignment options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -156,7 +156,12 @@ impl CornerRadii {
         }
     }
 
-    pub const fn with_values(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
+    pub const fn with_values(
+        top_left: f32,
+        top_right: f32,
+        bottom_right: f32,
+        bottom_left: f32,
+    ) -> Self {
         Self {
             top_left,
             top_right,
@@ -405,12 +410,10 @@ impl Canvas {
 
     fn color_to_paint(color: Color) -> tiny_skia::Paint<'static> {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(
-            color.red,
-            color.green,
-            color.blue,
-            color.alpha,
-        ).unwrap_or(tiny_skia::Color::BLACK));
+        paint.set_color(
+            tiny_skia::Color::from_rgba(color.red, color.green, color.blue, color.alpha)
+                .unwrap_or(tiny_skia::Color::BLACK),
+        );
         paint.anti_alias = true;
         paint
     }
@@ -421,9 +424,12 @@ impl Canvas {
             let mut mask = tiny_skia::Mask::new(self.pixmap.width(), self.pixmap.height())?;
             let clip_path = {
                 let mut pb = tiny_skia::PathBuilder::new();
-                pb.push_rect(
-                    tiny_skia::Rect::from_ltrb(clip.left, clip.top, clip.right, clip.bottom)?
-                );
+                pb.push_rect(tiny_skia::Rect::from_ltrb(
+                    clip.left,
+                    clip.top,
+                    clip.right,
+                    clip.bottom,
+                )?);
                 pb.finish()?
             };
             // Use the current content transform (not identity) so the mask
@@ -485,7 +491,8 @@ impl Canvas {
                     ..Default::default()
                 };
                 let clip_mask = self.create_clip_mask();
-                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
+                self.pixmap
+                    .stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
             }
         }
     }
@@ -500,7 +507,8 @@ impl Canvas {
                     ..Default::default()
                 };
                 let clip_mask = self.create_clip_mask();
-                self.pixmap.stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
+                self.pixmap
+                    .stroke_path(&path, &paint, &stroke, self.transform, clip_mask.as_ref());
             }
         }
     }
@@ -576,7 +584,9 @@ impl Canvas {
     /// Intersects the current clip rect with the given rect.
     pub fn clip(&mut self, rect: Rect) {
         self.clip_rect = Some(match self.clip_rect {
-            Some(existing) => existing.intersection(rect).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
+            Some(existing) => existing
+                .intersection(rect)
+                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)),
             None => rect,
         });
     }
@@ -632,26 +642,28 @@ impl Canvas {
         };
 
         let mut total_width = 0.0f32;
-        font_db.inner().with_face_data(font_id, |font_data_ref, face_index| {
-            let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
-                return;
-            };
+        font_db
+            .inner()
+            .with_face_data(font_id, |font_data_ref, face_index| {
+                let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                    return;
+                };
 
-            let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
-                return;
-            };
+                let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
+                    return;
+                };
 
-            let mut buffer = rustybuzz::UnicodeBuffer::new();
-            buffer.push_str(text);
-            let output = rustybuzz::shape(&buzz_face, &[], buffer);
+                let mut buffer = rustybuzz::UnicodeBuffer::new();
+                buffer.push_str(text);
+                let output = rustybuzz::shape(&buzz_face, &[], buffer);
 
-            let units_per_em = face.units_per_em() as f32;
-            let scale = self.font_size / units_per_em;
+                let units_per_em = face.units_per_em() as f32;
+                let scale = self.font_size / units_per_em;
 
-            for pos in output.glyph_positions() {
-                total_width += (pos.x_advance as f32) * scale;
-            }
-        });
+                for pos in output.glyph_positions() {
+                    total_width += (pos.x_advance as f32) * scale;
+                }
+            });
 
         if total_width == 0.0 {
             // Fallback if measurement failed
@@ -691,58 +703,60 @@ impl Canvas {
 
         // Use with_face_data to access the font bytes directly
         let mut rendered = false;
-        font_db.inner().with_face_data(font_id, |font_data_ref, face_index| {
-            // Parse the font
-            let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
-                return;
-            };
+        font_db
+            .inner()
+            .with_face_data(font_id, |font_data_ref, face_index| {
+                // Parse the font
+                let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                    return;
+                };
 
-            // Create rustybuzz face
-            let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
-                return;
-            };
+                // Create rustybuzz face
+                let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
+                    return;
+                };
 
-            // Shape the text
-            let mut buffer = rustybuzz::UnicodeBuffer::new();
-            buffer.push_str(text);
-            let output = rustybuzz::shape(&buzz_face, &[], buffer);
+                // Shape the text
+                let mut buffer = rustybuzz::UnicodeBuffer::new();
+                buffer.push_str(text);
+                let output = rustybuzz::shape(&buzz_face, &[], buffer);
 
-            // Calculate scale factor
-            let units_per_em = face.units_per_em() as f32;
-            let scale = self.font_size / units_per_em;
+                // Calculate scale factor
+                let units_per_em = face.units_per_em() as f32;
+                let scale = self.font_size / units_per_em;
 
-            // Render each glyph
-            let mut x_pos = p.x;
-            let y_pos = p.y;
+                // Render each glyph
+                let mut x_pos = p.x;
+                let y_pos = p.y;
 
-            let glyph_infos = output.glyph_infos();
-            let glyph_positions = output.glyph_positions();
+                let glyph_infos = output.glyph_infos();
+                let glyph_positions = output.glyph_positions();
 
-            for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
-                let glyph_id = ttf_parser::GlyphId(info.glyph_id as u16);
+                for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
+                    let glyph_id = ttf_parser::GlyphId(info.glyph_id as u16);
 
-                let glyph_x = x_pos + (pos.x_offset as f32) * scale;
-                let glyph_y = y_pos + (pos.y_offset as f32) * scale;
+                    let glyph_x = x_pos + (pos.x_offset as f32) * scale;
+                    let glyph_y = y_pos + (pos.y_offset as f32) * scale;
 
-                // Render the glyph using outline
-                let clip_mask = self.create_clip_mask();
-                Self::render_glyph_static(
-                    &mut self.pixmap,
-                    &face,
-                    glyph_id,
-                    glyph_x,
-                    glyph_y,
-                    scale,
-                    self.fill_color,
-                    self.transform,
-                    clip_mask.as_ref(),
-                );
+                    // Render the glyph using outline
+                    let clip_mask = self.create_clip_mask();
+                    Self::render_glyph_static(
+                        &mut self.pixmap,
+                        &face,
+                        glyph_id,
+                        glyph_x,
+                        glyph_y,
+                        scale,
+                        self.fill_color,
+                        self.transform,
+                        clip_mask.as_ref(),
+                    );
 
-                // Advance position
-                x_pos += (pos.x_advance as f32) * scale;
-            }
-            rendered = true;
-        });
+                    // Advance position
+                    x_pos += (pos.x_advance as f32) * scale;
+                }
+                rendered = true;
+            });
 
         // If rendering failed inside the closure, nothing more to do
         let _ = rendered;
@@ -822,6 +836,7 @@ impl Canvas {
     }
 
     /// Renders a single glyph at the given position (static version for use in closures).
+    #[allow(clippy::too_many_arguments)]
     fn render_glyph_static(
         pixmap: &mut tiny_skia::Pixmap,
         face: &ttf_parser::Face,
@@ -899,12 +914,10 @@ impl Canvas {
 
     /// Clears the canvas with the given color.
     pub fn clear(&mut self, color: Color) {
-        self.pixmap.fill(tiny_skia::Color::from_rgba(
-            color.red,
-            color.green,
-            color.blue,
-            color.alpha,
-        ).unwrap_or(tiny_skia::Color::WHITE));
+        self.pixmap.fill(
+            tiny_skia::Color::from_rgba(color.red, color.green, color.blue, color.alpha)
+                .unwrap_or(tiny_skia::Color::WHITE),
+        );
     }
 }
 

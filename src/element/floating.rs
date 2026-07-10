@@ -1,14 +1,14 @@
 //! Floating/draggable element.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
+use super::{share, Element, ElementPtr, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
 use crate::view::{MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// A floating element that can be positioned freely and dragged.
 pub struct Floating {
@@ -213,7 +213,8 @@ impl Element for Floating {
                 if self.draggable {
                     *self.dragging.write().unwrap() = true;
                     let pos = *self.position.read().unwrap();
-                    *self.drag_offset.write().unwrap() = Point::new(btn.pos.x - pos.x, btn.pos.y - pos.y);
+                    *self.drag_offset.write().unwrap() =
+                        Point::new(btn.pos.x - pos.x, btn.pos.y - pos.y);
                 }
                 return true;
             }
@@ -241,7 +242,8 @@ impl Element for Floating {
     fn handle_drag(&self, _ctx: &Context, btn: MouseButton) {
         if *self.dragging.read().unwrap() {
             let offset = *self.drag_offset.read().unwrap();
-            *self.position.write().unwrap() = Point::new(btn.pos.x - offset.x, btn.pos.y - offset.y);
+            *self.position.write().unwrap() =
+                Point::new(btn.pos.x - offset.x, btn.pos.y - offset.y);
         }
     }
 

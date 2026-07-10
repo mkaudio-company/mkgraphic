@@ -1,12 +1,12 @@
 //! Status bar element.
 
+use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
+use crate::support::point::Point;
+use crate::support::theme::get_theme;
 use std::any::Any;
 use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
-use super::context::{BasicContext, Context};
-use crate::support::point::Point;
-use crate::support::color::Color;
-use crate::support::theme::get_theme;
 
 /// A status bar segment.
 #[derive(Debug, Clone)]
@@ -113,7 +113,8 @@ impl StatusBar {
         // Calculate fixed widths and total flex
         for segment in segments.iter() {
             if segment.flex == 0.0 {
-                let w = segment.text.len() as f32 * theme.label_font_size * 0.6 + self.padding * 2.0;
+                let w =
+                    segment.text.len() as f32 * theme.label_font_size * 0.6 + self.padding * 2.0;
                 widths.push(w);
                 fixed_width += w;
             } else {

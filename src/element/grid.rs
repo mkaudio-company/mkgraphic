@@ -1,12 +1,12 @@
 //! Grid layout element.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, FULL_EXTENT};
+use super::composite::{Composite, CompositeBase, Storage};
 use super::context::{BasicContext, Context};
-use super::composite::{Storage, CompositeBase, Composite};
+use super::{Element, ElementPtr, ViewLimits, ViewStretch, FULL_EXTENT};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
+use std::any::Any;
+use std::sync::RwLock;
 
 /// A grid layout element that arranges children in rows and columns.
 pub struct Grid {
@@ -70,7 +70,7 @@ impl Grid {
     /// Returns the number of rows.
     fn row_count(&self) -> usize {
         let count = self.inner.len();
-        (count + self.columns - 1) / self.columns
+        count.div_ceil(self.columns)
     }
 
     fn compute_layout(&self, ctx: &BasicContext, bounds: &Rect) {
@@ -103,8 +103,10 @@ impl Grid {
         }
 
         // Calculate total minimum sizes
-        let total_min_width: f32 = col_min_widths.iter().sum::<f32>() + self.h_gap * (self.columns - 1) as f32;
-        let total_min_height: f32 = row_min_heights.iter().sum::<f32>() + self.v_gap * (rows - 1) as f32;
+        let total_min_width: f32 =
+            col_min_widths.iter().sum::<f32>() + self.h_gap * (self.columns - 1) as f32;
+        let total_min_height: f32 =
+            row_min_heights.iter().sum::<f32>() + self.v_gap * (rows - 1) as f32;
 
         // Calculate extra space
         let extra_width = (bounds.width() - total_min_width).max(0.0);
@@ -221,10 +223,14 @@ impl Element for Grid {
             }
         }
 
-        let total_min_width: f32 = col_min_widths.iter().sum::<f32>() + self.h_gap * (self.columns.saturating_sub(1)) as f32;
-        let total_max_width: f32 = col_max_widths.iter().sum::<f32>() + self.h_gap * (self.columns.saturating_sub(1)) as f32;
-        let total_min_height: f32 = row_min_heights.iter().sum::<f32>() + self.v_gap * rows.saturating_sub(1) as f32;
-        let total_max_height: f32 = row_max_heights.iter().sum::<f32>() + self.v_gap * rows.saturating_sub(1) as f32;
+        let total_min_width: f32 = col_min_widths.iter().sum::<f32>()
+            + self.h_gap * (self.columns.saturating_sub(1)) as f32;
+        let total_max_width: f32 = col_max_widths.iter().sum::<f32>()
+            + self.h_gap * (self.columns.saturating_sub(1)) as f32;
+        let total_min_height: f32 =
+            row_min_heights.iter().sum::<f32>() + self.v_gap * rows.saturating_sub(1) as f32;
+        let total_max_height: f32 =
+            row_max_heights.iter().sum::<f32>() + self.v_gap * rows.saturating_sub(1) as f32;
 
         ViewLimits {
             min: Point::new(total_min_width, total_min_height),
@@ -300,7 +306,11 @@ impl Element for Grid {
             }
         }
 
-        if leaf { None } else { Some(self) }
+        if leaf {
+            None
+        } else {
+            Some(self)
+        }
     }
 
     fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {

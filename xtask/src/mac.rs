@@ -28,9 +28,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
 
     let workspace_root = workspace_root()?;
-    let binary_path = workspace_root
-        .join("target/release/examples")
-        .join(example);
+    let binary_path = workspace_root.join("target/release/examples").join(example);
     if !binary_path.exists() {
         return Err(format!(
             "built binary not found at {binary_path:?} - is '{example}' an example target?"

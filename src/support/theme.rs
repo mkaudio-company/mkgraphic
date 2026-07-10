@@ -1,8 +1,8 @@
 //! Theming and styling constants.
 
 use super::color::Color;
-use super::rect::Rect;
 use super::font::Font;
+use super::rect::Rect;
 
 /// Theme configuration for the UI.
 #[derive(Debug, Clone)]
@@ -335,11 +335,7 @@ static CURRENT_THEME: RwLock<Option<Theme>> = RwLock::new(None);
 
 /// Returns a reference to the current theme.
 pub fn get_theme() -> Theme {
-    CURRENT_THEME
-        .read()
-        .unwrap()
-        .clone()
-        .unwrap_or_else(Theme::default)
+    CURRENT_THEME.read().unwrap().clone().unwrap_or_default()
 }
 
 /// Sets the current theme.

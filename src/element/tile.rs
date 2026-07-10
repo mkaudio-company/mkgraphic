@@ -2,13 +2,13 @@
 //!
 //! Tiles arrange elements in vertical or horizontal sequences.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, FocusRequest, FULL_EXTENT, share};
+use super::composite::{Composite, CompositeBase, Storage};
 use super::context::{BasicContext, Context};
-use super::composite::{Storage, CompositeBase, Composite};
+use super::{share, Element, ElementPtr, FocusRequest, ViewLimits, FULL_EXTENT};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Vertical tile element - stacks children vertically.
 pub struct VTile {
@@ -68,8 +68,8 @@ impl VTile {
         let extra = (height - total_min).max(0.0);
         let mut y = 0.0f32;
 
-        for i in 0..count {
-            tiles[i] = y;
+        for (i, tile_slot) in tiles.iter_mut().enumerate().take(count) {
+            *tile_slot = y;
             if let Some(child) = self.inner.at(i) {
                 let limits = child.limits(ctx);
                 let stretch = child.stretch();
@@ -116,8 +116,8 @@ impl CompositeBase for VTile {
         {
             let mut tiles = self.tiles.write().unwrap();
             // Recompute if wrong size or not yet computed (last element is 0)
-            let needs_compute = tiles.len() != count + 1 ||
-                (count > 0 && tiles.get(count).map_or(true, |&v| v == 0.0));
+            let needs_compute = tiles.len() != count + 1
+                || (count > 0 && tiles.get(count).is_none_or(|&v| v == 0.0));
             if needs_compute && count > 0 {
                 let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
                 let height = ctx.bounds.height();
@@ -202,7 +202,11 @@ impl Element for VTile {
 
         // If point is within our bounds but no child handled it
         if ctx.bounds.contains(p) {
-            if leaf { None } else { Some(self) }
+            if leaf {
+                None
+            } else {
+                Some(self)
+            }
         } else {
             None
         }
@@ -227,13 +231,13 @@ impl Element for VTile {
             if let Some(child) = self.inner.at(i) {
                 let child_ctx = ctx.with_bounds(bounds);
                 // Check if this child wants the click via hit_test
-                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
-                    if child.handle_click(&child_ctx, btn) {
-                        if btn.down {
-                            *self.drag_capture.write().unwrap() = Some(i);
-                        }
-                        return true;
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some()
+                    && child.handle_click(&child_ctx, btn)
+                {
+                    if btn.down {
+                        *self.drag_capture.write().unwrap() = Some(i);
                     }
+                    return true;
                 }
             }
         }
@@ -265,15 +269,20 @@ impl Element for VTile {
         }
     }
 
-    fn handle_scroll(&self, ctx: &Context, dir: crate::support::point::Point, p: crate::support::point::Point) -> bool {
+    fn handle_scroll(
+        &self,
+        ctx: &Context,
+        dir: crate::support::point::Point,
+        p: crate::support::point::Point,
+    ) -> bool {
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
             if let Some(child) = self.inner.at(i) {
                 let child_ctx = ctx.with_bounds(bounds);
-                if child.hit_test(&child_ctx, p, false, false).is_some() {
-                    if child.handle_scroll(&child_ctx, dir, p) {
-                        return true;
-                    }
+                if child.hit_test(&child_ctx, p, false, false).is_some()
+                    && child.handle_scroll(&child_ctx, dir, p)
+                {
+                    return true;
                 }
             }
         }
@@ -407,8 +416,8 @@ impl HTile {
         let extra = (width - total_min).max(0.0);
         let mut x = 0.0f32;
 
-        for i in 0..count {
-            tiles[i] = x;
+        for (i, tile_slot) in tiles.iter_mut().enumerate().take(count) {
+            *tile_slot = x;
             if let Some(child) = self.inner.at(i) {
                 let limits = child.limits(ctx);
                 let stretch = child.stretch();
@@ -454,8 +463,8 @@ impl CompositeBase for HTile {
         {
             let mut tiles = self.tiles.write().unwrap();
             // Recompute if wrong size or not yet computed (last element is 0)
-            let needs_compute = tiles.len() != count + 1 ||
-                (count > 0 && tiles.get(count).map_or(true, |&v| v == 0.0));
+            let needs_compute = tiles.len() != count + 1
+                || (count > 0 && tiles.get(count).is_none_or(|&v| v == 0.0));
             if needs_compute && count > 0 {
                 let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
                 let width = ctx.bounds.width();
@@ -536,7 +545,11 @@ impl Element for HTile {
 
         // If point is within our bounds but no child handled it
         if ctx.bounds.contains(p) {
-            if leaf { None } else { Some(self) }
+            if leaf {
+                None
+            } else {
+                Some(self)
+            }
         } else {
             None
         }
@@ -561,13 +574,13 @@ impl Element for HTile {
             if let Some(child) = self.inner.at(i) {
                 let child_ctx = ctx.with_bounds(bounds);
                 // Check if this child wants the click via hit_test
-                if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
-                    if child.handle_click(&child_ctx, btn) {
-                        if btn.down {
-                            *self.drag_capture.write().unwrap() = Some(i);
-                        }
-                        return true;
+                if child.hit_test(&child_ctx, btn.pos, false, false).is_some()
+                    && child.handle_click(&child_ctx, btn)
+                {
+                    if btn.down {
+                        *self.drag_capture.write().unwrap() = Some(i);
                     }
+                    return true;
                 }
             }
         }
@@ -599,15 +612,20 @@ impl Element for HTile {
         }
     }
 
-    fn handle_scroll(&self, ctx: &Context, dir: crate::support::point::Point, p: crate::support::point::Point) -> bool {
+    fn handle_scroll(
+        &self,
+        ctx: &Context,
+        dir: crate::support::point::Point,
+        p: crate::support::point::Point,
+    ) -> bool {
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
             if let Some(child) = self.inner.at(i) {
                 let child_ctx = ctx.with_bounds(bounds);
-                if child.hit_test(&child_ctx, p, false, false).is_some() {
-                    if child.handle_scroll(&child_ctx, dir, p) {
-                        return true;
-                    }
+                if child.hit_test(&child_ctx, p, false, false).is_some()
+                    && child.handle_scroll(&child_ctx, dir, p)
+                {
+                    return true;
                 }
             }
         }

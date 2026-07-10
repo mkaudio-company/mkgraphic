@@ -7,28 +7,25 @@
 
 use std::cell::RefCell;
 
-use objc2::rc::Retained;
-use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
-use objc2_foundation::{
-    NSString, MainThreadMarker, NSPoint, NSRect, NSSize,
-};
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
-    NSWindow, NSWindowStyleMask, NSCursor, NSPasteboard, NSView,
-    NSGraphicsContext, NSEvent, NSMenu, NSMenuItem,
-};
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::context::CGContext;
 use core_graphics::data_provider::CGDataProvider;
 use core_graphics::image::CGImage;
+use objc2::rc::Retained;
+use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
+    NSGraphicsContext, NSMenu, NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
+};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-use crate::support::point::{Point, Extent};
-use crate::support::canvas::Canvas;
-use crate::support::color::Color;
-use crate::support::rect::Rect;
 use crate::element::context::Context;
 use crate::element::ElementPtr;
-use crate::view::{View, KeyCode, CursorType, modifiers, MouseButton, MouseButtonKind};
+use crate::support::canvas::Canvas;
+use crate::support::color::Color;
+use crate::support::point::{Extent, Point};
+use crate::support::rect::Rect;
+use crate::view::{modifiers, CursorType, KeyCode, MouseButton, MouseButtonKind, View};
 
 /// Converts NSPoint to our Point type.
 fn ns_point_to_point(p: NSPoint) -> Point {
@@ -233,9 +230,7 @@ impl MacOSApp {
         use crate::element::menu::get_native_menu_bar;
 
         // Check if there's a custom menu bar configuration
-        let config = get_native_menu_bar().unwrap_or_else(|| {
-            crate::element::menu::NativeMenuBar::new()
-        });
+        let config = get_native_menu_bar().unwrap_or_default();
 
         unsafe {
             let main_menu = NSMenu::new(self.mtm);
@@ -316,7 +311,7 @@ impl MacOSApp {
         );
         hide_others_item.setKeyEquivalentModifierMask(
             objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand
-            | objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagOption
+                | objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagOption,
         );
         app_menu.addItem(&hide_others_item);
 
@@ -462,7 +457,11 @@ impl MacOSApp {
     }
 
     /// Adds a custom menu from NativeMenu configuration.
-    unsafe fn add_custom_menu(&self, main_menu: &NSMenu, custom_menu: &crate::element::menu::NativeMenu) {
+    unsafe fn add_custom_menu(
+        &self,
+        main_menu: &NSMenu,
+        custom_menu: &crate::element::menu::NativeMenu,
+    ) {
         let menu_item = NSMenuItem::new(self.mtm);
         let title = NSString::from_str(&custom_menu.title);
         let ns_menu = NSMenu::initWithTitle(self.mtm.alloc(), &title);
@@ -476,14 +475,20 @@ impl MacOSApp {
     }
 
     /// Adds a native menu item to a menu.
-    unsafe fn add_native_menu_item(&self, menu: &NSMenu, item: &crate::element::menu::NativeMenuItem) {
+    unsafe fn add_native_menu_item(
+        &self,
+        menu: &NSMenu,
+        item: &crate::element::menu::NativeMenuItem,
+    ) {
         if item.is_separator() {
             menu.addItem(&NSMenuItem::separatorItem(self.mtm));
             return;
         }
 
         let title = NSString::from_str(&item.label);
-        let key_equiv = item.shortcut.as_ref()
+        let key_equiv = item
+            .shortcut
+            .as_ref()
             .map(|s| s.key.to_string())
             .unwrap_or_default();
         let key_str = NSString::from_str(&key_equiv);
@@ -732,7 +737,9 @@ impl MKView {
 
     fn set_content(&self, content: ElementPtr) {
         *self.ivars().content.borrow_mut() = Some(content);
-        unsafe { self.setNeedsDisplay(true); }
+        unsafe {
+            self.setNeedsDisplay(true);
+        }
     }
 
     fn set_size(&self, size: Extent) {
@@ -760,7 +767,7 @@ impl MKView {
                 down,
                 click_count: event.clickCount() as i32,
                 button: button_kind,
-                modifiers: translate_flags(event.modifierFlags().bits() as usize),
+                modifiers: translate_flags(event.modifierFlags().bits()),
                 pos,
             };
 
@@ -820,7 +827,7 @@ impl MKView {
                 down: true,
                 click_count: 1,
                 button: button_kind,
-                modifiers: translate_flags(event.modifierFlags().bits() as usize),
+                modifiers: translate_flags(event.modifierFlags().bits()),
                 pos,
             };
 
@@ -888,13 +895,17 @@ impl MKView {
 
     fn handle_key_event(&self, event: &NSEvent, down: bool) {
         unsafe {
-            use crate::view::{KeyInfo, KeyAction};
+            use crate::view::{KeyAction, KeyInfo};
 
             let keycode = event.keyCode();
             let key = translate_key(keycode);
-            let modifiers = translate_flags(event.modifierFlags().bits() as usize);
+            let modifiers = translate_flags(event.modifierFlags().bits());
 
-            let action = if down { KeyAction::Press } else { KeyAction::Release };
+            let action = if down {
+                KeyAction::Press
+            } else {
+                KeyAction::Release
+            };
 
             let key_info = KeyInfo {
                 key,
@@ -1044,10 +1055,7 @@ pub struct MacOSWindow {
 impl MacOSWindow {
     /// Creates a new macOS window.
     pub fn new(title: &str, size: Extent, mtm: MainThreadMarker) -> Self {
-        let frame = NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            extent_to_ns_size(size),
-        );
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), extent_to_ns_size(size));
 
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
@@ -1131,6 +1139,8 @@ impl MacOSWindow {
 
     /// Triggers a redraw.
     pub fn refresh(&self) {
-        unsafe { self.mk_view.setNeedsDisplay(true); }
+        unsafe {
+            self.mk_view.setNeedsDisplay(true);
+        }
     }
 }

@@ -10,19 +10,19 @@
 //! - [`font`]: Font handling and text metrics
 //! - [`theme`]: Theming and styling constants
 
+pub mod canvas;
+pub mod circle;
+pub mod color;
+pub mod font;
+pub mod payload;
 pub mod point;
 pub mod rect;
-pub mod color;
-pub mod circle;
-pub mod canvas;
-pub mod font;
 pub mod theme;
-pub mod payload;
 
-pub use point::{Point, Extent, Axis};
-pub use rect::Rect;
-pub use color::Color;
-pub use circle::Circle;
 pub use canvas::Canvas;
+pub use circle::Circle;
+pub use color::Color;
 pub use font::Font;
+pub use point::{Axis, Extent, Point};
+pub use rect::Rect;
 pub use theme::Theme;

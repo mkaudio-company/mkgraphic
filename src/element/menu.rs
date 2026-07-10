@@ -1,14 +1,14 @@
 //! Menu and popup elements.
 
-use std::any::Any;
-use std::sync::{RwLock, Arc, OnceLock};
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
+use super::{share, Element, ElementPtr, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Menu item callback type.
 pub type MenuItemCallback = Box<dyn Fn() + Send + Sync>;
@@ -30,22 +30,34 @@ impl MenuModifiers {
 
     /// Command key (Cmd on macOS, Ctrl on other platforms).
     pub fn command() -> Self {
-        Self { command: true, ..Default::default() }
+        Self {
+            command: true,
+            ..Default::default()
+        }
     }
 
     /// Shift key.
     pub fn shift() -> Self {
-        Self { shift: true, ..Default::default() }
+        Self {
+            shift: true,
+            ..Default::default()
+        }
     }
 
     /// Option key (Alt on other platforms).
     pub fn option() -> Self {
-        Self { option: true, ..Default::default() }
+        Self {
+            option: true,
+            ..Default::default()
+        }
     }
 
     /// Control key.
     pub fn control() -> Self {
-        Self { control: true, ..Default::default() }
+        Self {
+            control: true,
+            ..Default::default()
+        }
     }
 
     /// Adds command modifier.
@@ -291,7 +303,9 @@ impl Menu {
 
         for item in &self.items {
             let text_width = item.label.len() as f32 * theme.menu_font_size * 0.6;
-            let shortcut_width = item.shortcut.as_ref()
+            let shortcut_width = item
+                .shortcut
+                .as_ref()
                 .map(|s| s.len() as f32 * theme.menu_font_size * 0.5 + 20.0)
                 .unwrap_or(0.0);
 
@@ -382,7 +396,8 @@ impl Menu {
         if let Some(ref shortcut) = item.shortcut {
             let shortcut_color = text_color.with_alpha(0.6);
             canvas.fill_style(shortcut_color);
-            let shortcut_x = bounds.right - 8.0 - shortcut.len() as f32 * theme.menu_font_size * 0.5;
+            let shortcut_x =
+                bounds.right - 8.0 - shortcut.len() as f32 * theme.menu_font_size * 0.5;
             canvas.fill_text(shortcut, Point::new(shortcut_x, y));
         }
 
@@ -419,7 +434,13 @@ impl Element for Menu {
         }
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if self.is_visible() && ctx.bounds.contains(p) {
             Some(self)
         } else {
@@ -922,15 +943,18 @@ impl NativeMenuBar {
 
     /// Creates a standard File menu with New, Open, Save, etc.
     pub fn standard_file_menu() -> NativeMenu {
-        NativeMenu::with_items("File", vec![
-            NativeMenuItem::new("New").shortcut_cmd('n'),
-            NativeMenuItem::new("Open...").shortcut_cmd('o'),
-            NativeMenuItem::separator(),
-            NativeMenuItem::new("Save").shortcut_cmd('s'),
-            NativeMenuItem::new("Save As...").shortcut_cmd_shift('s'),
-            NativeMenuItem::separator(),
-            NativeMenuItem::new("Close").shortcut_cmd('w'),
-        ])
+        NativeMenu::with_items(
+            "File",
+            vec![
+                NativeMenuItem::new("New").shortcut_cmd('n'),
+                NativeMenuItem::new("Open...").shortcut_cmd('o'),
+                NativeMenuItem::separator(),
+                NativeMenuItem::new("Save").shortcut_cmd('s'),
+                NativeMenuItem::new("Save As...").shortcut_cmd_shift('s'),
+                NativeMenuItem::separator(),
+                NativeMenuItem::new("Close").shortcut_cmd('w'),
+            ],
+        )
     }
 
     /// Creates a View menu.
@@ -956,7 +980,8 @@ pub fn set_native_menu_bar(menu_bar: NativeMenuBar) {
 
 /// Gets the current native menu bar configuration.
 pub fn get_native_menu_bar() -> Option<NativeMenuBar> {
-    NATIVE_MENU_BAR.get()
+    NATIVE_MENU_BAR
+        .get()
         .and_then(|storage| storage.read().ok())
         .and_then(|guard| guard.clone())
 }

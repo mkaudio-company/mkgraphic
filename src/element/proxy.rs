@@ -4,11 +4,11 @@
 //! and delegate most operations to it, while potentially augmenting or
 //! overriding certain behaviors.
 
-use std::any::Any;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, FocusRequest};
 use super::context::{BasicContext, Context};
+use super::{Element, ElementPtr, FocusRequest, ViewLimits, ViewStretch};
 use crate::support::point::Point;
-use crate::view::{MouseButton, KeyInfo, TextInfo, DropInfo, CursorTracking};
+use crate::view::{CursorTracking, DropInfo, KeyInfo, MouseButton, TextInfo};
+use std::any::Any;
 
 /// Base trait for proxy elements.
 pub trait ProxyBase: Element {

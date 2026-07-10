@@ -1,6 +1,6 @@
 //! Rectangle type for 2D regions.
 
-use super::point::{Point, Extent, Axis};
+use super::point::{Axis, Extent, Point};
 
 /// A rectangle defined by its left, top, right, and bottom edges.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -15,7 +15,12 @@ impl Rect {
     /// Creates a new rectangle from edge coordinates.
     #[inline]
     pub const fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self { left, top, right, bottom }
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     /// Creates a rectangle from origin point and size.

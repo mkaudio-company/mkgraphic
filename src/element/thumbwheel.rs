@@ -1,13 +1,13 @@
 //! Thumbwheel element for fine value adjustment.
 
+use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
+use crate::support::point::Point;
+use crate::support::theme::get_theme;
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
 use std::any::Any;
 use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
-use super::context::{BasicContext, Context};
-use crate::support::point::Point;
-use crate::support::color::Color;
-use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
 
 /// Thumbwheel orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -229,7 +229,13 @@ impl Element for Thumbwheel {
         self.draw_ticks(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {

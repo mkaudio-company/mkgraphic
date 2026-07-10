@@ -1,13 +1,13 @@
 //! Toggle switch element (iOS/Android style switches).
 
+use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
+use crate::support::point::Point;
+use crate::support::theme::get_theme;
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
 use std::any::Any;
 use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
-use super::context::{BasicContext, Context};
-use crate::support::point::Point;
-use crate::support::color::Color;
-use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
 
 /// Switch state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -118,10 +118,14 @@ impl SlideSwitch {
 
         // Interpolate between off and on colors
         let track_color = Color::new(
-            self.track_off_color.red + (self.track_on_color.red - self.track_off_color.red) * progress,
-            self.track_off_color.green + (self.track_on_color.green - self.track_off_color.green) * progress,
-            self.track_off_color.blue + (self.track_on_color.blue - self.track_off_color.blue) * progress,
-            self.track_off_color.alpha + (self.track_on_color.alpha - self.track_off_color.alpha) * progress,
+            self.track_off_color.red
+                + (self.track_on_color.red - self.track_off_color.red) * progress,
+            self.track_off_color.green
+                + (self.track_on_color.green - self.track_off_color.green) * progress,
+            self.track_off_color.blue
+                + (self.track_on_color.blue - self.track_off_color.blue) * progress,
+            self.track_off_color.alpha
+                + (self.track_on_color.alpha - self.track_off_color.alpha) * progress,
         );
 
         let color = match state {
@@ -199,7 +203,13 @@ impl Element for SlideSwitch {
         self.draw_thumb(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {

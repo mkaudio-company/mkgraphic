@@ -1,14 +1,14 @@
 //! Scrollable/scroll view element.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
+use super::{share, Element, ElementPtr, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
 use crate::view::{MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Scrollbar visibility options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,10 +107,8 @@ impl ScrollView {
         let max_x = (content_size.x - self.width).max(0.0);
         let max_y = (content_size.y - self.height).max(0.0);
 
-        *self.scroll_offset.write().unwrap() = Point::new(
-            offset.x.clamp(0.0, max_x),
-            offset.y.clamp(0.0, max_y),
-        );
+        *self.scroll_offset.write().unwrap() =
+            Point::new(offset.x.clamp(0.0, max_x), offset.y.clamp(0.0, max_y));
     }
 
     /// Scrolls to make a point visible.
@@ -503,10 +501,7 @@ impl Element for ScrollView {
 
     fn handle_scroll(&self, _ctx: &Context, dir: Point, _p: Point) -> bool {
         let current = *self.scroll_offset.read().unwrap();
-        let new_scroll = Point::new(
-            current.x - dir.x * 20.0,
-            current.y - dir.y * 20.0,
-        );
+        let new_scroll = Point::new(current.x - dir.x * 20.0, current.y - dir.y * 20.0);
         self.set_scroll(new_scroll);
         true
     }

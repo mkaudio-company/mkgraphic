@@ -72,7 +72,9 @@ fn main() -> ExitCode {
             print_usage();
             Ok(())
         }
-        other => Err(format!("unknown command '{other}' - run `cargo xtask help`")),
+        other => Err(format!(
+            "unknown command '{other}' - run `cargo xtask help`"
+        )),
     };
 
     match result {

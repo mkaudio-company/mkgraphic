@@ -3,11 +3,11 @@
 //! This module provides the View abstraction which represents a drawable surface
 //! and handles user input events.
 
-use std::collections::HashMap;
-use crate::support::point::{Point, Extent};
-use crate::support::rect::Rect;
-use crate::support::canvas::Canvas;
 use crate::element::{ElementPtr, ViewLimits};
+use crate::support::canvas::Canvas;
+use crate::support::point::{Extent, Point};
+use crate::support::rect::Rect;
+use std::collections::HashMap;
 
 /// Mouse button kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,35 +51,98 @@ impl MouseButton {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     // Letters
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
     // Numbers
-    Key0, Key1, Key2, Key3, Key4,
-    Key5, Key6, Key7, Key8, Key9,
+    Key0,
+    Key1,
+    Key2,
+    Key3,
+    Key4,
+    Key5,
+    Key6,
+    Key7,
+    Key8,
+    Key9,
 
     // Function keys
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 
     // Navigation
-    Up, Down, Left, Right,
-    Home, End, PageUp, PageDown,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 
     // Editing
-    Backspace, Delete, Insert,
-    Enter, Tab, Escape,
+    Backspace,
+    Delete,
+    Insert,
+    Enter,
+    Tab,
+    Escape,
     Space,
 
     // Modifiers
-    Shift, Control, Alt, Super,
-    LeftShift, RightShift,
-    LeftControl, RightControl,
-    LeftAlt, RightAlt,
-    LeftSuper, RightSuper,
+    Shift,
+    Control,
+    Alt,
+    Super,
+    LeftShift,
+    RightShift,
+    LeftControl,
+    RightControl,
+    LeftAlt,
+    RightAlt,
+    LeftSuper,
+    RightSuper,
 
     // Other
-    CapsLock, NumLock, ScrollLock,
-    PrintScreen, Pause,
+    CapsLock,
+    NumLock,
+    ScrollLock,
+    PrintScreen,
+    Pause,
     Menu,
 
     Unknown,

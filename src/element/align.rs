@@ -1,11 +1,11 @@
 //! Alignment elements for positioning children within their bounds.
 
-use std::any::Any;
-use super::{Element, ViewLimits, FocusRequest, FULL_EXTENT};
 use super::context::{BasicContext, Context};
+use super::{Element, FocusRequest, ViewLimits, FULL_EXTENT};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::view::{MouseButton, KeyInfo, TextInfo, CursorTracking};
+use crate::view::{CursorTracking, KeyInfo, MouseButton, TextInfo};
+use std::any::Any;
 
 /// Horizontal alignment element.
 pub struct HAlign<S: Element> {

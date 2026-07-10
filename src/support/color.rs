@@ -1,6 +1,6 @@
 //! Color types and common color constants.
 
-use std::ops::{Add, Sub, Mul};
+use std::ops::{Add, Mul, Sub};
 
 /// An RGBA color with floating-point components (0.0 to 1.0).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -15,13 +15,23 @@ impl Color {
     /// Creates a new color with the given RGBA components.
     #[inline]
     pub const fn new(red: f32, green: f32, blue: f32, alpha: f32) -> Self {
-        Self { red, green, blue, alpha }
+        Self {
+            red,
+            green,
+            blue,
+            alpha,
+        }
     }
 
     /// Creates a new opaque color (alpha = 1.0).
     #[inline]
     pub const fn rgb(red: f32, green: f32, blue: f32) -> Self {
-        Self { red, green, blue, alpha: 1.0 }
+        Self {
+            red,
+            green,
+            blue,
+            alpha: 1.0,
+        }
     }
 
     /// Creates a color from a 24-bit RGB integer (0xRRGGBB).

@@ -1,14 +1,14 @@
 //! List and selection elements.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// List selection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -225,7 +225,9 @@ impl List {
             let bounds = self.item_bounds(ctx, i);
 
             // Skip if completely outside visible area (optimization)
-            if bounds.bottom < ctx.bounds.top - self.item_height || bounds.top > ctx.bounds.bottom + self.item_height {
+            if bounds.bottom < ctx.bounds.top - self.item_height
+                || bounds.top > ctx.bounds.bottom + self.item_height
+            {
                 continue;
             }
 
@@ -273,7 +275,8 @@ impl List {
         let scroll = *self.scroll_offset.read().unwrap();
 
         let scrollbar_height = (visible_height / total_height * visible_height).max(20.0);
-        let scrollbar_y = scroll / (total_height - visible_height) * (visible_height - scrollbar_height);
+        let scrollbar_y =
+            scroll / (total_height - visible_height) * (visible_height - scrollbar_height);
 
         let scrollbar_rect = Rect::new(
             ctx.bounds.right - 8.0,
@@ -330,7 +333,13 @@ impl Element for List {
         self.draw_scrollbar(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {
@@ -359,7 +368,10 @@ impl Element for List {
         let items = self.items.read().unwrap();
         for i in 0..items.len() {
             let bounds = self.item_bounds(ctx, i);
-            if bounds.contains(btn.pos) && bounds.top >= ctx.bounds.top && bounds.bottom <= ctx.bounds.bottom {
+            if bounds.contains(btn.pos)
+                && bounds.top >= ctx.bounds.top
+                && bounds.bottom <= ctx.bounds.bottom
+            {
                 drop(items);
 
                 let mut selected = self.selected.write().unwrap();
@@ -433,7 +445,10 @@ impl Element for List {
 
                 for i in 0..items.len() {
                     let bounds = self.item_bounds(ctx, i);
-                    if bounds.contains(p) && bounds.top >= ctx.bounds.top && bounds.bottom <= ctx.bounds.bottom {
+                    if bounds.contains(p)
+                        && bounds.top >= ctx.bounds.top
+                        && bounds.bottom <= ctx.bounds.bottom
+                    {
                         *hovered = Some(i);
                         break;
                     }
@@ -679,7 +694,13 @@ impl Element for Dropdown {
         self.draw_dropdown(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if !self.enabled {
             return None;
         }

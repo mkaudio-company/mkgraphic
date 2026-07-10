@@ -15,7 +15,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
 use crate::support::point::Extent;
-use crate::view::{View, KeyCode};
+use crate::view::{KeyCode, View};
 
 /// Translates an X11 keycode to our KeyCode enum.
 pub fn translate_key(keycode: u8) -> KeyCode {

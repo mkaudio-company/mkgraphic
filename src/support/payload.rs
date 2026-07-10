@@ -81,7 +81,10 @@ mod tests {
         payload.insert(mime_types::TEXT_URI_LIST, "file:///path/to/file.txt");
 
         assert!(payload.contains(mime_types::TEXT_PLAIN));
-        assert_eq!(payload.get(mime_types::TEXT_PLAIN), Some(&"Hello, World!".to_string()));
+        assert_eq!(
+            payload.get(mime_types::TEXT_PLAIN),
+            Some(&"Hello, World!".to_string())
+        );
         assert_eq!(payload.len(), 2);
     }
 }

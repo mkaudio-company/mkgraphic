@@ -1,14 +1,14 @@
 //! Dial/knob elements for rotary value selection.
 
-use std::any::Any;
-use std::sync::RwLock;
-use std::f32::consts::PI;
-use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
-use crate::support::point::Point;
+use super::{Element, ViewLimits, ViewStretch};
 use crate::support::color::Color;
+use crate::support::point::Point;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::f32::consts::PI;
+use std::sync::RwLock;
 
 /// Dial state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -62,8 +62,8 @@ impl Dial {
             gauge_color: theme.dial_gauge_color,
             gauge_width: theme.dial_gauge_width,
             size: 50.0,
-            start_angle: -135.0 * PI / 180.0,  // -135 degrees from top
-            end_angle: 135.0 * PI / 180.0,     // 135 degrees from top
+            start_angle: -135.0 * PI / 180.0, // -135 degrees from top
+            end_angle: 135.0 * PI / 180.0,    // 135 degrees from top
             enabled: true,
             on_change: None,
             drag_start_y: RwLock::new(0.0),
@@ -232,7 +232,9 @@ impl Dial {
 
         if angle_range.abs() > 0.01 {
             canvas.begin_path();
-            let segment_count = ((segments as f32) * (angle_range.abs() / (self.end_angle - self.start_angle))).ceil() as i32;
+            let segment_count = ((segments as f32)
+                * (angle_range.abs() / (self.end_angle - self.start_angle)))
+                .ceil() as i32;
             for i in 0..=segment_count.max(1) {
                 let t = i as f32 / segment_count.max(1) as f32;
                 let angle = self.start_angle + t * angle_range - PI / 2.0;
@@ -307,7 +309,13 @@ impl Element for Dial {
         self.draw_indicator(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             // Check if within the circular dial area
             let center = ctx.bounds.center();
@@ -381,7 +389,8 @@ impl Element for Dial {
         let angle_range = self.end_angle - self.start_angle;
         let delta_normalized = (angle_delta / angle_range) as f64;
 
-        let start_normalized = (drag_start_value - self.min_value) / (self.max_value - self.min_value);
+        let start_normalized =
+            (drag_start_value - self.min_value) / (self.max_value - self.min_value);
         let new_normalized = (start_normalized + delta_normalized).clamp(0.0, 1.0);
 
         self.set_normalized_value(new_normalized);

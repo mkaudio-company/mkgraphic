@@ -48,8 +48,10 @@ fn make_ico(img: &image::DynamicImage, out_path: &Path) -> Result<(), String> {
             .map_err(|e| format!("encoding {size}x{size} ico entry: {e}"))?;
         dir.add_entry(entry);
     }
-    let file = std::fs::File::create(out_path).map_err(|e| format!("creating {out_path:?}: {e}"))?;
-    dir.write(file).map_err(|e| format!("writing {out_path:?}: {e}"))
+    let file =
+        std::fs::File::create(out_path).map_err(|e| format!("creating {out_path:?}: {e}"))?;
+    dir.write(file)
+        .map_err(|e| format!("writing {out_path:?}: {e}"))
 }
 
 /// Builds a .iconset via `sips` and packs it with `iconutil`. macOS-only.

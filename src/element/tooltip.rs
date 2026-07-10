@@ -1,14 +1,14 @@
 //! Tooltip element.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
+use super::{share, Element, ElementPtr, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
 use crate::view::CursorTracking;
+use std::any::Any;
+use std::sync::RwLock;
 
 /// A tooltip wrapper element.
 pub struct Tooltip {
@@ -103,10 +103,6 @@ impl Tooltip {
     }
 
     fn draw_tooltip(&self, _ctx: &Context) {
-        if !self.is_visible() || self.tooltip_text.is_empty() {
-            return;
-        }
-
         // Note: In a real implementation, tooltips would typically be drawn
         // in a separate overlay layer after all other content, to ensure
         // they appear on top. This simplified version draws inline.

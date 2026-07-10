@@ -1,14 +1,14 @@
 //! Tab element for switching between views.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, ViewStretch, share};
 use super::context::{BasicContext, Context};
+use super::{share, Element, ElementPtr, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Tab position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -191,7 +191,8 @@ impl TabBar {
             TabPosition::Top | TabPosition::Bottom => {
                 let mut x = bar.left;
                 for (i, tab) in self.tabs.iter().enumerate() {
-                    let width = tab.label.len() as f32 * theme.label_font_size * 0.6 + self.tab_padding * 2.0;
+                    let width = tab.label.len() as f32 * theme.label_font_size * 0.6
+                        + self.tab_padding * 2.0;
                     if i == index {
                         return Rect::new(x, bar.top, x + width, bar.bottom);
                     }

@@ -250,10 +250,13 @@ mod tests {
             }
             if let Some(name) = tag.strip_prefix('/') {
                 let name = name.split_whitespace().next().unwrap_or(name);
-                let top = stack.pop().unwrap_or_else(|| {
-                    panic!("closing tag </{name}> with no matching open tag")
-                });
-                assert_eq!(top, name, "mismatched closing tag: expected </{top}>, got </{name}>");
+                let top = stack
+                    .pop()
+                    .unwrap_or_else(|| panic!("closing tag </{name}> with no matching open tag"));
+                assert_eq!(
+                    top, name,
+                    "mismatched closing tag: expected </{top}>, got </{name}>"
+                );
             } else {
                 let name = tag.split_whitespace().next().unwrap_or(tag);
                 stack.push(name.to_string());

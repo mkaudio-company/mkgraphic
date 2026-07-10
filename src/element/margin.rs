@@ -1,11 +1,11 @@
 //! Margin elements for adding spacing around children.
 
-use std::any::Any;
-use super::{Element, ViewLimits, FocusRequest};
 use super::context::{BasicContext, Context};
+use super::{Element, FocusRequest, ViewLimits};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::view::{MouseButton, KeyInfo, TextInfo, CursorTracking};
+use crate::view::{CursorTracking, KeyInfo, MouseButton, TextInfo};
+use std::any::Any;
 
 /// Margin values for all four sides.
 #[derive(Debug, Clone, Copy, Default)]
@@ -19,7 +19,12 @@ pub struct Margin {
 impl Margin {
     /// Creates new margins with the given values.
     pub const fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self { left, top, right, bottom }
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     /// Creates uniform margins.

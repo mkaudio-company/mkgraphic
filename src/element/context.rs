@@ -2,11 +2,11 @@
 
 use std::cell::RefCell;
 
+use super::Element;
+use crate::support::canvas::Canvas;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::canvas::Canvas;
 use crate::view::View;
-use super::Element;
 
 /// Basic context containing view and canvas references.
 ///

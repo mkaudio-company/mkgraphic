@@ -1,14 +1,14 @@
 //! Slider elements for selecting values within a range.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Slider state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -291,12 +291,8 @@ impl Default for Slider {
 impl Element for Slider {
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
         match self.orientation {
-            SliderOrientation::Horizontal => {
-                ViewLimits::fixed(self.length, self.thumb_size)
-            }
-            SliderOrientation::Vertical => {
-                ViewLimits::fixed(self.thumb_size, self.length)
-            }
+            SliderOrientation::Horizontal => ViewLimits::fixed(self.length, self.thumb_size),
+            SliderOrientation::Vertical => ViewLimits::fixed(self.thumb_size, self.length),
         }
     }
 
@@ -312,7 +308,13 @@ impl Element for Slider {
         self.draw_thumb(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {

@@ -1,13 +1,13 @@
 //! Layer elements for stacking children on top of each other.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ElementPtr, ViewLimits, FocusRequest, share};
+use super::composite::{Composite, CompositeBase, Storage};
 use super::context::{BasicContext, Context};
-use super::composite::{Storage, CompositeBase, Composite};
+use super::{share, Element, ElementPtr, FocusRequest, ViewLimits};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::view::{MouseButton, KeyInfo, TextInfo};
+use crate::view::{KeyInfo, MouseButton, TextInfo};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Layer element - stacks children on top of each other.
 ///
@@ -149,7 +149,11 @@ impl Element for Layer {
             }
         }
 
-        if leaf { None } else { Some(self) }
+        if leaf {
+            None
+        } else {
+            Some(self)
+        }
     }
 
     fn wants_control(&self) -> bool {

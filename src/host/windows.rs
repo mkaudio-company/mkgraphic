@@ -5,36 +5,24 @@
 
 #![cfg(target_os = "windows")]
 
-use std::ffi::c_void;
-use std::mem;
-use std::ptr;
-
-use windows::core::{PCWSTR, w};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM, RECT, POINT};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, InvalidateRect, PAINTSTRUCT, GetDC, ReleaseDC,
-};
+use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, UpdateWindow, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-    LoadCursorW, PostQuitMessage, RegisterClassW, ShowWindow, TranslateMessage,
-    UpdateWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW,
-    MSG, SW_SHOW, WM_DESTROY, WM_PAINT, WM_SIZE, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_KEYDOWN, WM_KEYUP, WM_CHAR,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW, GetWindowRect, SetWindowPos,
-    SWP_NOZORDER, SWP_NOMOVE, WINDOW_EX_STYLE, SetCursor,
-    IDC_IBEAM, IDC_CROSS, IDC_HAND, IDC_SIZEWE, IDC_SIZENS,
-};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_CAPITAL,
+    GetKeyState, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowRect, LoadCursorW,
+    PostQuitMessage, RegisterClassW, SetCursor, SetWindowPos, ShowWindow, TranslateMessage,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_SIZENS,
+    IDC_SIZEWE, MSG, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
-use crate::support::point::{Point, Extent};
-use crate::view::{
-    View, BaseView, MouseButton, MouseButtonKind, KeyCode, KeyAction, KeyInfo,
-    TextInfo, CursorTracking, CursorType, DropInfo,
-};
+use crate::support::point::{Extent, Point};
+use crate::view::{CursorType, KeyCode, View};
 
 /// Translates a Windows virtual key code to our KeyCode enum.
 pub fn translate_key(vk: i32) -> KeyCode {
@@ -189,9 +177,8 @@ unsafe extern "system" fn window_proc(
             // Handle resize
             LRESULT(0)
         }
-        WM_LBUTTONDOWN | WM_LBUTTONUP |
-        WM_RBUTTONDOWN | WM_RBUTTONUP |
-        WM_MBUTTONDOWN | WM_MBUTTONUP => {
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
+        | WM_MBUTTONUP => {
             // Handle mouse clicks
             LRESULT(0)
         }
@@ -286,7 +273,10 @@ impl WindowsWindow {
                 None,
                 instance,
                 None,
-            )?;
+            );
+            if hwnd.0 == 0 {
+                return None;
+            }
 
             Some(Self {
                 hwnd,

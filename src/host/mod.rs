@@ -15,9 +15,9 @@ mod linux;
 #[cfg(target_os = "macos")]
 pub use macos::{MacOSApp, MacOSWindow};
 
+use crate::element::ElementPtr;
 use crate::support::point::Extent;
 use crate::view::View;
-use crate::element::ElementPtr;
 
 #[cfg(target_os = "macos")]
 use objc2_foundation::MainThreadMarker;
@@ -156,9 +156,8 @@ impl Window {
         let title_str = title.into();
 
         #[cfg(target_os = "macos")]
-        let macos_window = {
-            MainThreadMarker::new().map(|mtm| MacOSWindow::new(&title_str, size, mtm))
-        };
+        let macos_window =
+            { MainThreadMarker::new().map(|mtm| MacOSWindow::new(&title_str, size, mtm)) };
 
         Self {
             title: title_str,

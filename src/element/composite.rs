@@ -1,11 +1,11 @@
 //! Composite elements that contain multiple child elements.
 
-use std::any::Any;
-use std::collections::HashSet;
-use super::{Element, ElementPtr, ViewLimits, FocusRequest};
 use super::context::{BasicContext, Context};
+use super::{Element, ElementPtr, FocusRequest, ViewLimits};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
+use std::any::Any;
+use std::collections::HashSet;
 
 /// Storage trait for accessing elements by index.
 pub trait Storage {
@@ -94,10 +94,9 @@ pub trait CompositeBase: Element + Storage {
             if let Some(element) = self.at(i) {
                 let bounds = self.bounds_of(ctx, i);
                 // Check if bounds intersect with view bounds
-                if crate::support::rect::intersects(&bounds, &ctx.bounds) {
-                    if !f(element, i, bounds) {
-                        break;
-                    }
+                if crate::support::rect::intersects(&bounds, &ctx.bounds) && !f(element, i, bounds)
+                {
+                    break;
                 }
             }
         }
@@ -213,17 +212,17 @@ impl Storage for Composite {
 
 impl CompositeBase for Composite {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        self.cached_bounds.get(index).copied().unwrap_or(Rect::zero())
+        self.cached_bounds
+            .get(index)
+            .copied()
+            .unwrap_or(Rect::zero())
     }
 }
 
 impl Element for Composite {
     fn limits(&self, ctx: &BasicContext) -> ViewLimits {
         // Default: combine limits of all children
-        let mut limits = ViewLimits::new(
-            Point::new(0.0, 0.0),
-            Point::new(0.0, 0.0),
-        );
+        let mut limits = ViewLimits::new(Point::new(0.0, 0.0), Point::new(0.0, 0.0));
 
         for child in &self.children {
             let child_limits = child.limits(ctx);
@@ -382,7 +381,10 @@ impl<const N: usize> Storage for ArrayComposite<N> {
 
 impl<const N: usize> CompositeBase for ArrayComposite<N> {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        self.cached_bounds.get(index).copied().unwrap_or(Rect::zero())
+        self.cached_bounds
+            .get(index)
+            .copied()
+            .unwrap_or(Rect::zero())
     }
 }
 

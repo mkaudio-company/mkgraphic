@@ -1,14 +1,14 @@
 //! Text input elements.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch, FocusRequest};
 use super::context::{BasicContext, Context};
+use super::{Element, FocusRequest, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, KeyInfo, TextInfo, CursorTracking, KeyCode};
+use crate::view::{CursorTracking, KeyCode, KeyInfo, MouseButton, MouseButtonKind, TextInfo};
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Text box state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,8 +164,16 @@ impl TextBox {
             let end = sel_start.max(*cursor_pos);
 
             // Find byte indices
-            let start_byte = text.char_indices().nth(start).map(|(i, _)| i).unwrap_or(text.len());
-            let end_byte = text.char_indices().nth(end).map(|(i, _)| i).unwrap_or(text.len());
+            let start_byte = text
+                .char_indices()
+                .nth(start)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
+            let end_byte = text
+                .char_indices()
+                .nth(end)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
 
             text.replace_range(start_byte..end_byte, "");
             *cursor_pos = start;
@@ -173,7 +181,11 @@ impl TextBox {
         }
 
         // Insert new text
-        let byte_pos = text.char_indices().nth(*cursor_pos).map(|(i, _)| i).unwrap_or(text.len());
+        let byte_pos = text
+            .char_indices()
+            .nth(*cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
         text.insert_str(byte_pos, s);
         *cursor_pos += s.chars().count();
     }
@@ -189,16 +201,32 @@ impl TextBox {
             let start = sel_start.min(*cursor_pos);
             let end = sel_start.max(*cursor_pos);
 
-            let start_byte = text.char_indices().nth(start).map(|(i, _)| i).unwrap_or(text.len());
-            let end_byte = text.char_indices().nth(end).map(|(i, _)| i).unwrap_or(text.len());
+            let start_byte = text
+                .char_indices()
+                .nth(start)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
+            let end_byte = text
+                .char_indices()
+                .nth(end)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
 
             text.replace_range(start_byte..end_byte, "");
             *cursor_pos = start;
             *selection_start = None;
         } else if *cursor_pos > 0 {
             let prev_pos = *cursor_pos - 1;
-            let start_byte = text.char_indices().nth(prev_pos).map(|(i, _)| i).unwrap_or(0);
-            let end_byte = text.char_indices().nth(*cursor_pos).map(|(i, _)| i).unwrap_or(text.len());
+            let start_byte = text
+                .char_indices()
+                .nth(prev_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let end_byte = text
+                .char_indices()
+                .nth(*cursor_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
 
             text.replace_range(start_byte..end_byte, "");
             *cursor_pos = prev_pos;
@@ -216,8 +244,16 @@ impl TextBox {
             let start = sel_start.min(*cursor_pos);
             let end = sel_start.max(*cursor_pos);
 
-            let start_byte = text.char_indices().nth(start).map(|(i, _)| i).unwrap_or(text.len());
-            let end_byte = text.char_indices().nth(end).map(|(i, _)| i).unwrap_or(text.len());
+            let start_byte = text
+                .char_indices()
+                .nth(start)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
+            let end_byte = text
+                .char_indices()
+                .nth(end)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
 
             text.replace_range(start_byte..end_byte, "");
             *cursor_pos = start;
@@ -225,8 +261,16 @@ impl TextBox {
         } else {
             let char_count = text.chars().count();
             if *cursor_pos < char_count {
-                let start_byte = text.char_indices().nth(*cursor_pos).map(|(i, _)| i).unwrap_or(text.len());
-                let end_byte = text.char_indices().nth(*cursor_pos + 1).map(|(i, _)| i).unwrap_or(text.len());
+                let start_byte = text
+                    .char_indices()
+                    .nth(*cursor_pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len());
+                let end_byte = text
+                    .char_indices()
+                    .nth(*cursor_pos + 1)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len());
 
                 text.replace_range(start_byte..end_byte, "");
             }
@@ -405,12 +449,7 @@ impl TextBox {
         let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
         let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, end);
 
-        let sel_rect = Rect::new(
-            x1,
-            ctx.bounds.top + 4.0,
-            x2,
-            ctx.bounds.bottom - 4.0,
-        );
+        let sel_rect = Rect::new(x1, ctx.bounds.top + 4.0, x2, ctx.bounds.bottom - 4.0);
 
         canvas.fill_style(self.highlight_color);
         canvas.fill_rect(sel_rect);
@@ -428,7 +467,8 @@ impl TextBox {
 
         // Measure text width up to cursor position
         canvas.font_size(self.font_size);
-        let x = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, cursor_pos);
+        let x =
+            ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, cursor_pos);
         let y1 = ctx.bounds.top + 4.0;
         let y2 = ctx.bounds.bottom - 4.0;
 
@@ -463,7 +503,13 @@ impl Element for TextBox {
         self.draw_caret(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {
@@ -538,7 +584,8 @@ impl Element for TextBox {
         }
 
         let shift = k.modifiers & crate::view::modifiers::SHIFT != 0;
-        let ctrl = k.modifiers & (crate::view::modifiers::CONTROL | crate::view::modifiers::SUPER) != 0;
+        let ctrl =
+            k.modifiers & (crate::view::modifiers::CONTROL | crate::view::modifiers::SUPER) != 0;
 
         match k.key {
             KeyCode::Left => {

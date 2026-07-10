@@ -1,13 +1,13 @@
 //! Progress bar element.
 
-use std::any::Any;
-use std::sync::RwLock;
-use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
+use std::any::Any;
+use std::sync::RwLock;
 
 /// Progress bar style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,10 +1,10 @@
 //! Size constraint elements.
 
-use std::any::Any;
-use super::{Element, ViewLimits, ViewStretch, FocusRequest};
 use super::context::{BasicContext, Context};
+use super::{Element, FocusRequest, ViewLimits, ViewStretch};
 use crate::support::point::Point;
-use crate::view::{MouseButton, KeyInfo, TextInfo, CursorTracking};
+use crate::view::{CursorTracking, KeyInfo, MouseButton, TextInfo};
+use std::any::Any;
 
 /// Fixed size element.
 pub struct FixedSize<S: Element> {
@@ -16,7 +16,11 @@ pub struct FixedSize<S: Element> {
 impl<S: Element> FixedSize<S> {
     /// Creates a new fixed size element.
     pub fn new(width: f32, height: f32, subject: S) -> Self {
-        Self { subject, width, height }
+        Self {
+            subject,
+            width,
+            height,
+        }
     }
 
     /// Returns the width.
@@ -156,7 +160,11 @@ pub struct MinSize<S: Element> {
 impl<S: Element> MinSize<S> {
     /// Creates a new minimum size element.
     pub fn new(min_width: f32, min_height: f32, subject: S) -> Self {
-        Self { subject, min_width, min_height }
+        Self {
+            subject,
+            min_width,
+            min_height,
+        }
     }
 }
 
@@ -259,7 +267,11 @@ pub struct MaxSize<S: Element> {
 impl<S: Element> MaxSize<S> {
     /// Creates a new maximum size element.
     pub fn new(max_width: f32, max_height: f32, subject: S) -> Self {
-        Self { subject, max_width, max_height }
+        Self {
+            subject,
+            max_width,
+            max_height,
+        }
     }
 }
 

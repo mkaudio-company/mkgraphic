@@ -1,14 +1,14 @@
 //! Checkbox and radio button elements.
 
-use std::any::Any;
-use std::sync::{Arc, RwLock};
-use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
+use super::{Element, ViewLimits, ViewStretch};
+use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
-use crate::support::color::Color;
 use crate::support::theme::get_theme;
-use crate::view::{MouseButton, MouseButtonKind, CursorTracking};
+use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use std::any::Any;
+use std::sync::{Arc, RwLock};
 
 /// Checkbox state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -213,7 +213,13 @@ impl Element for Checkbox {
         self.draw_label(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {
@@ -313,7 +319,9 @@ pub struct RadioGroup {
 impl RadioGroup {
     /// Creates a new, initially empty (nothing selected) radio group.
     pub fn new() -> Self {
-        Self { selected: Arc::new(RwLock::new(None)) }
+        Self {
+            selected: Arc::new(RwLock::new(None)),
+        }
     }
 
     /// Returns the id of the currently selected member, if any.
@@ -433,7 +441,10 @@ impl RadioButton {
 
         canvas.fill_style(color);
         canvas.begin_path();
-        canvas.add_circle(crate::support::circle::Circle::new(center, self.circle_size / 2.0));
+        canvas.add_circle(crate::support::circle::Circle::new(
+            center,
+            self.circle_size / 2.0,
+        ));
         canvas.fill();
     }
 
@@ -458,7 +469,10 @@ impl RadioButton {
 
         canvas.fill_style(color);
         canvas.begin_path();
-        canvas.add_circle(crate::support::circle::Circle::new(center, self.circle_size / 4.0));
+        canvas.add_circle(crate::support::circle::Circle::new(
+            center,
+            self.circle_size / 4.0,
+        ));
         canvas.fill();
     }
 
@@ -510,7 +524,13 @@ impl Element for RadioButton {
         self.draw_label(ctx);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {
