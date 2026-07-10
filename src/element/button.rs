@@ -33,7 +33,7 @@ pub struct BasicButton {
     corner_radius: f32,
     enabled: bool,
     on_click: Option<ClickCallback>,
-    value: bool, // For toggle buttons
+    value: RwLock<bool>, // For toggle buttons
 }
 
 impl BasicButton {
@@ -48,7 +48,7 @@ impl BasicButton {
             corner_radius: theme.button_corner_radius,
             enabled: true,
             on_click: None,
-            value: false,
+            value: RwLock::new(false),
         }
     }
 
@@ -93,12 +93,12 @@ impl BasicButton {
 
     /// Returns whether the button is pressed (for toggle buttons).
     pub fn value(&self) -> bool {
-        self.value
+        *self.value.read().unwrap()
     }
 
     /// Sets the value (for toggle buttons).
-    pub fn set_value(&mut self, value: bool) {
-        self.value = value;
+    pub fn set_value(&self, value: bool) {
+        *self.value.write().unwrap() = value;
     }
 
     fn draw_background(&self, ctx: &Context) {
@@ -279,17 +279,17 @@ impl ToggleButton {
 
     /// Returns whether the button is toggled on.
     pub fn value(&self) -> bool {
-        self.inner.value
+        self.inner.value()
     }
 
     /// Sets the toggle state.
-    pub fn set_value(&mut self, value: bool) {
-        self.inner.value = value;
+    pub fn set_value(&self, value: bool) {
+        self.inner.set_value(value);
     }
 
     /// Toggles the state.
-    pub fn toggle(&mut self) {
-        self.inner.value = !self.inner.value;
+    pub fn toggle(&self) {
+        self.inner.set_value(!self.inner.value());
     }
 }
 
@@ -299,13 +299,17 @@ impl Element for ToggleButton {
     }
 
     fn draw(&self, ctx: &Context) {
-        // Modify color if toggled
-        let original_color = self.inner.body_color;
-        if self.inner.value {
-            // Would need interior mutability here
-            // For now, just draw with current color
-        }
         self.inner.draw(ctx);
+
+        // Highlight the body when toggled on.
+        if self.value() {
+            let mut canvas = ctx.canvas.borrow_mut();
+            canvas.stroke_style(self.active_color);
+            canvas.line_width(2.0);
+            canvas.begin_path();
+            canvas.add_round_rect(ctx.bounds, self.inner.corner_radius);
+            canvas.stroke();
+        }
     }
 
     fn wants_control(&self) -> bool {
@@ -313,6 +317,10 @@ impl Element for ToggleButton {
     }
 
     fn click(&mut self, ctx: &Context, btn: MouseButton) -> bool {
+        self.handle_click(ctx, btn)
+    }
+
+    fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
         if !self.inner.enabled || btn.button != crate::view::MouseButtonKind::Left {
             return false;
         }

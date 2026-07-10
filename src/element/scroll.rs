@@ -453,6 +453,10 @@ impl Element for ScrollView {
     }
 
     fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
         let dragging_v = *self.dragging_v.read().unwrap();
         let dragging_h = *self.dragging_h.read().unwrap();
 

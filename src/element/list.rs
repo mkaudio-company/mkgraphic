@@ -671,6 +671,11 @@ impl Element for Dropdown {
 
     fn draw(&self, ctx: &Context) {
         self.draw_button(ctx);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        // Drawn in the overlay pass (after all normal siblings) so the
+        // expanded popup is never painted over by content below it.
         self.draw_dropdown(ctx);
     }
 

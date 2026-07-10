@@ -45,6 +45,10 @@ impl<S: Element + 'static> Element for FixedSize<S> {
         self.subject.draw(ctx);
     }
 
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
+    }
+
     fn layout(&mut self, ctx: &Context) {
         self.subject.layout(ctx);
     }
@@ -172,6 +176,10 @@ impl<S: Element + 'static> Element for MinSize<S> {
         self.subject.draw(ctx);
     }
 
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
+    }
+
     fn layout(&mut self, ctx: &Context) {
         self.subject.layout(ctx);
     }
@@ -269,6 +277,10 @@ impl<S: Element + 'static> Element for MaxSize<S> {
 
     fn draw(&self, ctx: &Context) {
         self.subject.draw(ctx);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
     }
 
     fn layout(&mut self, ctx: &Context) {
@@ -375,6 +387,10 @@ impl<S: Element + 'static> Element for Stretch<S> {
 
     fn draw(&self, ctx: &Context) {
         self.subject.draw(ctx);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
     }
 
     fn layout(&mut self, ctx: &Context) {

@@ -627,27 +627,41 @@ declare_class!(
         fn draw_rect(&self, _dirty_rect: NSRect) {
             let ivars = self.ivars();
 
-            // Get actual view frame size
+            // Get actual view frame size, in points
             let frame = self.frame();
             let size = Extent::new(frame.size.width as f32, frame.size.height as f32);
             *ivars.size.borrow_mut() = size;
 
-            let width = size.x as u32;
-            let height = size.y as u32;
-
-            if width == 0 || height == 0 {
+            if size.x <= 0.0 || size.y <= 0.0 {
                 return;
             }
 
-            // Create or resize canvas
+            // Query the window's backing scale factor so we rasterize at
+            // native resolution on HiDPI/Retina displays. Without this the
+            // canvas is sized 1:1 with points and gets blurrily upscaled by
+            // CoreGraphics when blitted onto a higher-density backing store.
+            let scale: f32 = unsafe {
+                let window_ptr: *mut objc2::runtime::AnyObject = objc2::msg_send![self, window];
+                if window_ptr.is_null() {
+                    1.0
+                } else {
+                    let factor: f64 = objc2::msg_send![window_ptr, backingScaleFactor];
+                    factor as f32
+                }
+            };
+
+            let pixel_width = (size.x * scale).round().max(1.0) as u32;
+            let pixel_height = (size.y * scale).round().max(1.0) as u32;
+
+            // Create or resize canvas at physical pixel resolution
             {
                 let mut canvas_opt = ivars.canvas.borrow_mut();
                 let needs_new = match &*canvas_opt {
-                    Some(c) => c.width() != width || c.height() != height,
+                    Some(c) => c.width() != pixel_width || c.height() != pixel_height,
                     None => true,
                 };
                 if needs_new {
-                    *canvas_opt = Canvas::new(width, height);
+                    *canvas_opt = Canvas::new(pixel_width, pixel_height);
                 }
             }
 
@@ -656,6 +670,12 @@ declare_class!(
             if let Some(ref mut canvas) = *canvas_opt {
                 // Clear with dark background
                 canvas.clear(Color::new(0.2, 0.2, 0.2, 1.0));
+
+                // Establish the HiDPI base scale so element drawing (which
+                // operates entirely in logical points) rasterizes across the
+                // full physical pixel resolution of the canvas.
+                canvas.reset_transform();
+                canvas.scale(scale, scale);
 
                 // Draw elements if we have content
                 let content_ref = ivars.content.borrow();
@@ -668,7 +688,8 @@ declare_class!(
                     };
 
                     // Create a temporary view for the context
-                    let temp_view = View::new(size);
+                    let mut temp_view = View::new(size);
+                    temp_view.set_scale(scale);
 
                     // We need to temporarily move the canvas into a RefCell for the Context
                     // Take canvas out, wrap in RefCell, draw, then put back
@@ -684,8 +705,10 @@ declare_class!(
                     *canvas = canvas_cell.into_inner();
                 }
 
-                // Blit to screen
-                Self::blit_to_screen(canvas, width, height);
+                // Blit to screen. `size` (points) is the destination rect;
+                // the canvas holds `pixel_width x pixel_height` physical
+                // pixels, so CoreGraphics maps it 1:1 to device pixels.
+                Self::blit_to_screen(canvas, size);
             }
         }
     }
@@ -760,17 +783,17 @@ impl MKView {
                     let temp_view = View::new(size);
                     let ctx = Context::new(&temp_view, &canvas_cell, bounds);
 
-                    // Handle the click first - this allows menus and other controls
-                    // to process the click before focus is cleared
-                    let handled = content.handle_click(&ctx, mouse_btn);
-
-                    // Clear focus from all elements on mouse down
-                    // This ensures text boxes lose focus when clicking elsewhere.
-                    // Note: Controls like TextBox will re-establish focus in handle_click
-                    // if they were the target of the click.
+                    // Clear focus from all elements on mouse down first. This
+                    // ensures text boxes lose focus when clicking elsewhere -
+                    // and, critically, runs *before* dispatching the click so
+                    // that if the click lands on a focusable control (e.g. a
+                    // TextBox), that control's own re-focus in handle_click
+                    // below isn't immediately wiped out afterward.
                     if down {
                         content.clear_focus();
                     }
+
+                    let handled = content.handle_click(&ctx, mouse_btn);
 
                     // Trigger redraw
                     self.setNeedsDisplay(true);
@@ -944,7 +967,11 @@ impl MKView {
         }
     }
 
-    fn blit_to_screen(canvas: &Canvas, width: u32, height: u32) {
+    /// Blits `canvas` (rasterized at physical pixel resolution) into the
+    /// current graphics context, scaled to fit `logical_size` (in points).
+    /// On HiDPI displays the canvas holds more pixels than there are points,
+    /// so this maps 1:1 to device pixels instead of upscaling a 1x bitmap.
+    fn blit_to_screen(canvas: &Canvas, logical_size: Extent) {
         unsafe {
             // Get the current graphics context
             let Some(ns_ctx) = NSGraphicsContext::currentContext() else {
@@ -957,6 +984,9 @@ impl MKView {
             if cg_ctx_ptr.is_null() {
                 return;
             }
+
+            let pixel_width = canvas.width();
+            let pixel_height = canvas.height();
 
             // Get pixmap data - tiny-skia stores premultiplied RGBA
             let pixmap = canvas.pixmap();
@@ -972,11 +1002,11 @@ impl MKView {
             // kCGBitmapByteOrderDefault (0) = native byte order
             // Combined: just 1 for standard RGBA premultiplied
             let cg_image = CGImage::new(
-                width as usize,
-                height as usize,
+                pixel_width as usize,
+                pixel_height as usize,
                 8,
                 32,
-                width as usize * 4,
+                pixel_width as usize * 4,
                 &color_space,
                 1, // kCGImageAlphaPremultipliedLast (RGBA order)
                 &provider,
@@ -984,9 +1014,11 @@ impl MKView {
                 0, // kCGRenderingIntentDefault
             );
 
+            // Destination rect is in points, not pixels - CoreGraphics scales
+            // the (higher-resolution) image to fill it.
             let rect = core_graphics::geometry::CGRect::new(
                 &core_graphics::geometry::CGPoint::new(0.0, 0.0),
-                &core_graphics::geometry::CGSize::new(width as f64, height as f64),
+                &core_graphics::geometry::CGSize::new(logical_size.x as f64, logical_size.y as f64),
             );
 
             let cg_ctx = CGContext::from_existing_context_ptr(cg_ctx_ptr as *mut _);
@@ -994,7 +1026,7 @@ impl MKView {
             // Flip the context to match our top-left origin coordinate system
             // Core Graphics has origin at bottom-left, we need top-left
             cg_ctx.save();
-            cg_ctx.translate(0.0, height as f64);
+            cg_ctx.translate(0.0, logical_size.y as f64);
             cg_ctx.scale(1.0, -1.0);
             cg_ctx.draw_image(rect, &cg_image);
             cg_ctx.restore();

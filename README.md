@@ -49,13 +49,16 @@ src/
 ├── support/            # Core utilities
 │   ├── point.rs        # Point, Extent, Axis types
 │   ├── rect.rs         # Rectangle geometry
+│   ├── circle.rs       # Circle geometry
 │   ├── color.rs        # RGBA colors
 │   ├── canvas.rs       # 2D drawing abstraction
 │   ├── font.rs         # Font handling
-│   └── theme.rs        # Theming system
+│   ├── theme.rs        # Theming system
+│   └── payload.rs      # Drag-and-drop payload data
 ├── element/            # UI element system
 │   ├── mod.rs          # Element trait
 │   ├── context.rs      # Render/event context
+│   ├── proxy.rs        # Proxy elements (wrap/delegate to a subject)
 │   ├── composite.rs    # Container elements
 │   ├── tile.rs         # VTile/HTile layouts
 │   ├── align.rs        # Alignment elements
@@ -105,7 +108,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mkgraphic = "0.2"
+mkgraphic = "0.3"
 ```
 
 ### Basic Example
@@ -246,6 +249,12 @@ Elements can receive keyboard focus through the focus system:
 
 ## Examples
 
+A minimal starter example:
+
+```bash
+cargo run --example hello
+```
+
 Run the elements gallery to see all available widgets:
 
 ```bash
@@ -267,6 +276,52 @@ cargo build --release
 # Run tests
 cargo test
 ```
+
+## Packaging
+
+A `cargo xtask` (see [xtask/](xtask/)) turns a release build of any example
+(or your own app depending on mkgraphic in the same style) into a
+distributable package.
+
+### macOS: signed .app bundle
+
+```bash
+# One square source PNG (1024x1024 recommended) -> AppIcon.icns + icon.ico
+cargo xtask make-icons --source path/to/icon.png --out-dir path/to/icons
+
+cargo xtask bundle-mac \
+    --example elements_gallery \
+    --icon path/to/icons/AppIcon.icns \
+    --name "Elements Gallery" \
+    --identity "Developer ID Application: Your Name (TEAMID)"
+```
+
+Produces `target/bundle/Elements Gallery.app`. `--identity` is a signing
+identity from **your own** Keychain (`security find-identity -v -p codesigning`
+lists what's available) - this tool never hardcodes or assumes anyone's
+identity, since every user packaging their own app needs to sign with their
+own certificate. Omit `--identity` to fall back to ad-hoc signing, which runs
+locally but won't pass Gatekeeper if you distribute the app to another Mac.
+
+### Windows: MSI installer
+
+Must run on Windows, with the [WiX Toolset v3](https://wixtoolset.org/)
+(`candle`/`light`) on `PATH`:
+
+```powershell
+cargo xtask bundle-windows `
+    --example elements_gallery `
+    --icon path/to/icons/icon.ico `
+    --name "Elements Gallery" `
+    --upgrade-code "<a GUID you generate once and keep for this app>"
+```
+
+Embeds the icon into the .exe (via a `build.rs` + `winres`, gated behind the
+`MKGRAPHIC_APP_ICON` env var so a plain `cargo build` is unaffected) and
+produces `target/bundle/Elements Gallery.msi`. Generate the upgrade code once
+per app (e.g. `[guid]::NewGuid()` in PowerShell) and keep it constant across
+releases - it's what lets the MSI upgrade a previous install instead of
+conflicting with it.
 
 ## License
 

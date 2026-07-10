@@ -14,6 +14,8 @@ use crate::support::rect::Rect;
 pub struct VTile {
     inner: Composite,
     tiles: RwLock<Vec<f32>>,
+    /// Index of the child currently capturing mouse drag events, if any.
+    drag_capture: RwLock<Option<usize>>,
 }
 
 impl VTile {
@@ -22,6 +24,7 @@ impl VTile {
         Self {
             inner: Composite::new(),
             tiles: RwLock::new(Vec::new()),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -31,6 +34,7 @@ impl VTile {
         Self {
             inner: Composite::from_vec(children),
             tiles: RwLock::new(vec![0.0; len + 1]),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -168,6 +172,16 @@ impl Element for VTile {
                 }
             }
         }
+
+        // Second pass: overlays (e.g. an expanded dropdown) always draw last
+        // so a later sibling's normal content never paints over them.
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                let bounds = self.bounds_of(ctx, i);
+                let child_ctx = ctx.with_bounds(bounds);
+                child.draw_overlay(&child_ctx);
+            }
+        }
     }
 
     fn layout(&mut self, _ctx: &Context) {
@@ -195,6 +209,18 @@ impl Element for VTile {
     }
 
     fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
+        // On release, deliver to whichever child captured the drag, regardless
+        // of whether the pointer is still within that child's bounds.
+        if !btn.down {
+            if let Some(index) = self.drag_capture.write().unwrap().take() {
+                if let Some(child) = self.inner.at(index) {
+                    let bounds = self.bounds_of(ctx, index);
+                    let child_ctx = ctx.with_bounds(bounds);
+                    return child.handle_click(&child_ctx, btn);
+                }
+            }
+        }
+
         // Only forward to child that passes hit_test for this position
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
@@ -203,6 +229,9 @@ impl Element for VTile {
                 // Check if this child wants the click via hit_test
                 if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
                     if child.handle_click(&child_ctx, btn) {
+                        if btn.down {
+                            *self.drag_capture.write().unwrap() = Some(i);
+                        }
                         return true;
                     }
                 }
@@ -212,6 +241,18 @@ impl Element for VTile {
     }
 
     fn handle_drag(&self, ctx: &Context, btn: crate::view::MouseButton) {
+        // Route to the child that captured the drag on mouse-down, even if the
+        // pointer has since moved outside that child's bounds (e.g. dragging a
+        // small dial well beyond its own hit region).
+        if let Some(index) = *self.drag_capture.read().unwrap() {
+            if let Some(child) = self.inner.at(index) {
+                let bounds = self.bounds_of(ctx, index);
+                let child_ctx = ctx.with_bounds(bounds);
+                child.handle_drag(&child_ctx, btn);
+                return;
+            }
+        }
+
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
             if let Some(child) = self.inner.at(i) {
@@ -314,6 +355,8 @@ impl Element for VTile {
 pub struct HTile {
     inner: Composite,
     tiles: RwLock<Vec<f32>>,
+    /// Index of the child currently capturing mouse drag events, if any.
+    drag_capture: RwLock<Option<usize>>,
 }
 
 impl HTile {
@@ -322,6 +365,7 @@ impl HTile {
         Self {
             inner: Composite::new(),
             tiles: RwLock::new(Vec::new()),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -331,6 +375,7 @@ impl HTile {
         Self {
             inner: Composite::from_vec(children),
             tiles: RwLock::new(vec![0.0; len + 1]),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -465,6 +510,16 @@ impl Element for HTile {
                 }
             }
         }
+
+        // Second pass: overlays (e.g. an expanded dropdown) always draw last
+        // so a later sibling's normal content never paints over them.
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                let bounds = self.bounds_of(ctx, i);
+                let child_ctx = ctx.with_bounds(bounds);
+                child.draw_overlay(&child_ctx);
+            }
+        }
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
@@ -488,6 +543,18 @@ impl Element for HTile {
     }
 
     fn handle_click(&self, ctx: &Context, btn: crate::view::MouseButton) -> bool {
+        // On release, deliver to whichever child captured the drag, regardless
+        // of whether the pointer is still within that child's bounds.
+        if !btn.down {
+            if let Some(index) = self.drag_capture.write().unwrap().take() {
+                if let Some(child) = self.inner.at(index) {
+                    let bounds = self.bounds_of(ctx, index);
+                    let child_ctx = ctx.with_bounds(bounds);
+                    return child.handle_click(&child_ctx, btn);
+                }
+            }
+        }
+
         // Only forward to child that passes hit_test for this position
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
@@ -496,6 +563,9 @@ impl Element for HTile {
                 // Check if this child wants the click via hit_test
                 if child.hit_test(&child_ctx, btn.pos, false, false).is_some() {
                     if child.handle_click(&child_ctx, btn) {
+                        if btn.down {
+                            *self.drag_capture.write().unwrap() = Some(i);
+                        }
                         return true;
                     }
                 }
@@ -505,6 +575,18 @@ impl Element for HTile {
     }
 
     fn handle_drag(&self, ctx: &Context, btn: crate::view::MouseButton) {
+        // Route to the child that captured the drag on mouse-down, even if the
+        // pointer has since moved outside that child's bounds (e.g. dragging a
+        // small dial well beyond its own hit region).
+        if let Some(index) = *self.drag_capture.read().unwrap() {
+            if let Some(child) = self.inner.at(index) {
+                let bounds = self.bounds_of(ctx, index);
+                let child_ctx = ctx.with_bounds(bounds);
+                child.handle_drag(&child_ctx, btn);
+                return;
+            }
+        }
+
         for i in 0..self.inner.len() {
             let bounds = self.bounds_of(ctx, i);
             if let Some(child) = self.inner.at(i) {

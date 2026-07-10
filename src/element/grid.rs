@@ -271,6 +271,16 @@ impl Element for Grid {
                 }
             }
         }
+
+        // Second pass: overlays (e.g. an expanded dropdown) always draw last
+        // so a later sibling's normal content never paints over them.
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                let bounds = self.bounds_of(ctx, i);
+                let child_ctx = ctx.with_bounds(bounds);
+                child.draw_overlay(&child_ctx);
+            }
+        }
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {

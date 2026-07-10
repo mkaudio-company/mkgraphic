@@ -78,6 +78,10 @@ impl<S: Element + 'static> Element for Proxy<S> {
         self.subject.draw(ctx);
     }
 
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
+    }
+
     fn layout(&mut self, ctx: &Context) {
         self.subject.layout(ctx);
     }
@@ -219,6 +223,10 @@ impl Element for RefProxy {
 
     fn draw(&self, ctx: &Context) {
         self.subject.draw(ctx);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
     }
 
     fn wants_control(&self) -> bool {

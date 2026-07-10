@@ -267,6 +267,13 @@ impl Canvas {
         self.transform = self.transform.pre_scale(sx, sy);
     }
 
+    /// Resets the transform to identity, discarding any accumulated
+    /// translate/rotate/scale. Used to establish a clean base transform
+    /// (e.g. a HiDPI scale factor) at the start of a frame.
+    pub fn reset_transform(&mut self) {
+        self.transform = tiny_skia::Transform::identity();
+    }
+
     // --- Paths ---
 
     /// Begins a new path.
@@ -419,11 +426,16 @@ impl Canvas {
                 );
                 pb.finish()?
             };
+            // Use the current content transform (not identity) so the mask
+            // lines up with the same coordinate space as the paths it clips.
+            // clip_rect is expressed in the same logical units as draw calls,
+            // and at scale != 1.0 (HiDPI) identity would misalign the mask
+            // against the physical-pixel-resolution pixmap.
             mask.fill_path(
                 &clip_path,
                 tiny_skia::FillRule::Winding,
                 true,
-                tiny_skia::Transform::identity(),
+                self.transform,
             );
             Some(mask)
         })

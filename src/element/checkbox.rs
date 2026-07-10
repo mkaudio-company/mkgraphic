@@ -1,7 +1,7 @@
 //! Checkbox and radio button elements.
 
 use std::any::Any;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use super::{Element, ViewLimits, ViewStretch};
 use super::context::{BasicContext, Context};
 use crate::support::point::Point;
@@ -299,10 +299,34 @@ impl Element for Checkbox {
     }
 }
 
+/// Shared selection state for a group of mutually-exclusive radio buttons.
+///
+/// Without a group, each `RadioButton` only tracks its own `selected` flag,
+/// so selecting one never deselects another - clone this handle and attach
+/// it to every button in the group via [`RadioButton::group`] to get normal
+/// radio-button exclusivity.
+#[derive(Clone, Default)]
+pub struct RadioGroup {
+    selected: Arc<RwLock<Option<u64>>>,
+}
+
+impl RadioGroup {
+    /// Creates a new, initially empty (nothing selected) radio group.
+    pub fn new() -> Self {
+        Self { selected: Arc::new(RwLock::new(None)) }
+    }
+
+    /// Returns the id of the currently selected member, if any.
+    pub fn selected(&self) -> Option<u64> {
+        *self.selected.read().unwrap()
+    }
+}
+
 /// A radio button element for selecting one option from a group.
 pub struct RadioButton {
     label: String,
     selected: RwLock<bool>,
+    group: Option<(RadioGroup, u64)>,
     state: RwLock<CheckboxState>,
     circle_color: Color,
     indicator_color: Color,
@@ -319,6 +343,7 @@ impl RadioButton {
         Self {
             label: label.into(),
             selected: RwLock::new(false),
+            group: None,
             state: RwLock::new(CheckboxState::Normal),
             circle_color: theme.frame_color,
             indicator_color: theme.indicator_bright_color,
@@ -331,7 +356,14 @@ impl RadioButton {
 
     /// Sets the initial selected state.
     pub fn selected(self, selected: bool) -> Self {
-        *self.selected.write().unwrap() = selected;
+        self.set_selected(selected);
+        self
+    }
+
+    /// Joins a [`RadioGroup`] under the given id, so selecting this button
+    /// automatically deselects every other button sharing the same group.
+    pub fn group(mut self, group: &RadioGroup, id: u64) -> Self {
+        self.group = Some((group.clone(), id));
         self
     }
 
@@ -361,12 +393,26 @@ impl RadioButton {
 
     /// Returns whether the radio button is selected.
     pub fn is_selected(&self) -> bool {
-        *self.selected.read().unwrap()
+        if let Some((group, id)) = &self.group {
+            group.selected() == Some(*id)
+        } else {
+            *self.selected.read().unwrap()
+        }
     }
 
-    /// Sets the selected state.
+    /// Sets the selected state. If this button belongs to a [`RadioGroup`],
+    /// selecting it deselects every other member of the same group.
     pub fn set_selected(&self, selected: bool) {
-        *self.selected.write().unwrap() = selected;
+        if let Some((group, id)) = &self.group {
+            let mut current = group.selected.write().unwrap();
+            if selected {
+                *current = Some(*id);
+            } else if *current == Some(*id) {
+                *current = None;
+            }
+        } else {
+            *self.selected.write().unwrap() = selected;
+        }
     }
 
     fn draw_circle(&self, ctx: &Context) {

@@ -23,6 +23,8 @@ fn main() {
 }
 
 fn create_gallery() -> impl Element {
+    let radio_group = RadioGroup::new();
+
     htile![
         // Left column - Basic controls
         margin(10.0, vtile![
@@ -39,8 +41,8 @@ fn create_gallery() -> impl Element {
             margin(5.0, checkbox("Option 2").checked(true).on_change(|checked| println!("Checkbox 2: {}", checked))),
 
             section_label("Radio Buttons"),
-            margin(5.0, radio_button("Choice A").on_select(|| println!("Radio A selected"))),
-            margin(5.0, radio_button("Choice B").on_select(|| println!("Radio B selected"))),
+            margin(5.0, radio_button("Choice A").group(&radio_group, 0).selected(true).on_select(|| println!("Radio A selected"))),
+            margin(5.0, radio_button("Choice B").group(&radio_group, 1).on_select(|| println!("Radio B selected"))),
 
             section_label("Toggle Switches"),
             margin(5.0, htile![

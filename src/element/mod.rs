@@ -212,6 +212,13 @@ pub trait Element: Send + Sync + Any {
     /// Draws this element.
     fn draw(&self, ctx: &Context) {}
 
+    /// Draws transient overlay content (e.g. an expanded dropdown/popup) that
+    /// must appear above every sibling, regardless of tree order. Containers
+    /// call this in a second pass after all children have drawn their normal
+    /// content, so overlays are never occluded by later siblings. Wrapper
+    /// elements should forward this to their subject; the default is a no-op.
+    fn draw_overlay(&self, _ctx: &Context) {}
+
     /// Performs layout calculations.
     fn layout(&mut self, ctx: &Context) {}
 

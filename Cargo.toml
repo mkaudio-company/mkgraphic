@@ -1,12 +1,16 @@
+[workspace]
+members = ["xtask"]
+
 [package]
 name = "mkgraphic"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 description = "A Rust port of the cycfi/elements GUI framework"
 license = "MIT"
 documentation = "https://docs.rs/mkgraphic"
 repository = "https://github.com/mkaudio-company/mkgraphic"
 authors = ["MinjaeKim"]
+build = "build.rs"
 
 [features]
 default = ["platform-native"]
@@ -52,6 +56,9 @@ windows = { version = "0.52", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winres = "0.1"
 
 [dev-dependencies]
 env_logger = "0.10"

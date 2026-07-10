@@ -269,7 +269,11 @@ impl Element for Thumbwheel {
         true
     }
 
-    fn drag(&mut self, _ctx: &Context, btn: MouseButton) {
+    fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, _ctx: &Context, btn: MouseButton) {
         if !self.enabled {
             return;
         }
@@ -291,7 +295,11 @@ impl Element for Thumbwheel {
         }
     }
 
-    fn scroll(&mut self, _ctx: &Context, dir: Point, _p: Point) -> bool {
+    fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
+        self.handle_scroll(ctx, dir, p)
+    }
+
+    fn handle_scroll(&self, _ctx: &Context, dir: Point, _p: Point) -> bool {
         if !self.enabled {
             return false;
         }

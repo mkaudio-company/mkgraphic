@@ -150,6 +150,12 @@ impl<S: Element + 'static> Element for MarginElement<S> {
         self.subject.draw(&adjusted_ctx);
     }
 
+    fn draw_overlay(&self, ctx: &Context) {
+        let adjusted_bounds = self.adjust_bounds(ctx.bounds);
+        let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
+        self.subject.draw_overlay(&adjusted_ctx);
+    }
+
     fn layout(&mut self, ctx: &Context) {
         let adjusted_bounds = self.adjust_bounds(ctx.bounds);
         let adjusted_ctx = ctx.with_bounds(adjusted_bounds);

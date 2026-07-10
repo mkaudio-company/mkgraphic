@@ -234,7 +234,11 @@ impl Element for Floating {
         bounds.contains(btn.pos)
     }
 
-    fn drag(&mut self, _ctx: &Context, btn: MouseButton) {
+    fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, _ctx: &Context, btn: MouseButton) {
         if *self.dragging.read().unwrap() {
             let offset = *self.drag_offset.read().unwrap();
             *self.position.write().unwrap() = Point::new(btn.pos.x - offset.x, btn.pos.y - offset.y);

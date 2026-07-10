@@ -1,6 +1,7 @@
 //! Layer elements for stacking children on top of each other.
 
 use std::any::Any;
+use std::sync::RwLock;
 use super::{Element, ElementPtr, ViewLimits, FocusRequest, share};
 use super::context::{BasicContext, Context};
 use super::composite::{Storage, CompositeBase, Composite};
@@ -13,6 +14,8 @@ use crate::view::{MouseButton, KeyInfo, TextInfo};
 /// All children occupy the same bounds. The last child is drawn on top.
 pub struct Layer {
     inner: Composite,
+    /// Index of the child currently capturing mouse drag events, if any.
+    drag_capture: RwLock<Option<usize>>,
 }
 
 impl Layer {
@@ -20,6 +23,7 @@ impl Layer {
     pub fn new() -> Self {
         Self {
             inner: Composite::new(),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -27,6 +31,7 @@ impl Layer {
     pub fn from_vec(children: Vec<ElementPtr>) -> Self {
         Self {
             inner: Composite::from_vec(children),
+            drag_capture: RwLock::new(None),
         }
     }
 
@@ -115,6 +120,14 @@ impl Element for Layer {
                 child.draw(ctx);
             }
         }
+
+        // Second pass: overlays (e.g. an expanded dropdown) always draw last
+        // so a later sibling's normal content never paints over them.
+        for i in 0..self.inner.len() {
+            if let Some(child) = self.inner.at(i) {
+                child.draw_overlay(ctx);
+            }
+        }
     }
 
     fn layout(&mut self, ctx: &Context) {
@@ -149,10 +162,23 @@ impl Element for Layer {
     }
 
     fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
+        // On release, deliver to whichever child captured the drag, regardless
+        // of whether the pointer is still within that child's hit region.
+        if !btn.down {
+            if let Some(index) = self.drag_capture.write().unwrap().take() {
+                if let Some(child) = self.inner.at(index) {
+                    return child.handle_click(ctx, btn);
+                }
+            }
+        }
+
         // Forward click to topmost child that accepts it
         for i in (0..self.inner.len()).rev() {
             if let Some(child) = self.inner.at(i) {
                 if child.handle_click(ctx, btn) {
+                    if btn.down {
+                        *self.drag_capture.write().unwrap() = Some(i);
+                    }
                     return true;
                 }
             }
@@ -161,6 +187,15 @@ impl Element for Layer {
     }
 
     fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        // Route to the child that captured the drag on mouse-down, even if the
+        // pointer has since moved outside that child's hit region.
+        if let Some(index) = *self.drag_capture.read().unwrap() {
+            if let Some(child) = self.inner.at(index) {
+                child.handle_drag(ctx, btn);
+                return;
+            }
+        }
+
         for i in (0..self.inner.len()).rev() {
             if let Some(child) = self.inner.at(i) {
                 if child.hit_test(ctx, btn.pos, false, false).is_some() {

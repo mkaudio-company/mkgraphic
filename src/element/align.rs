@@ -55,6 +55,10 @@ impl<S: Element + 'static> Element for HAlign<S> {
         self.subject.draw(ctx);
     }
 
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
+    }
+
     fn layout(&mut self, ctx: &Context) {
         self.subject.layout(ctx);
     }
@@ -191,6 +195,10 @@ impl<S: Element + 'static> Element for VAlign<S> {
 
     fn draw(&self, ctx: &Context) {
         self.subject.draw(ctx);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        self.subject.draw_overlay(ctx);
     }
 
     fn layout(&mut self, ctx: &Context) {

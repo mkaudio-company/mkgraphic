@@ -70,7 +70,7 @@ pub mod prelude {
         label::{label, Label},
         button::{button, BasicButton},
         slider::{slider, vslider, Slider, SliderOrientation},
-        checkbox::{checkbox, Checkbox, radio_button, RadioButton},
+        checkbox::{checkbox, Checkbox, radio_button, RadioButton, RadioGroup},
         switch::{slide_switch, SlideSwitch},
         dial::{dial, dial_with_range, Dial},
         text_box::{text_box, TextBox},
