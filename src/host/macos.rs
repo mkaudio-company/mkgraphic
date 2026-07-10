@@ -1143,4 +1143,16 @@ impl MacOSWindow {
             self.mk_view.setNeedsDisplay(true);
         }
     }
+
+    /// Returns the raw `NSWindow*` pointer, for embedding externally-managed
+    /// native content (e.g. a caller-owned content view rendered by another
+    /// library) into this window instead of using mkgraphic's own element
+    /// tree for it.
+    ///
+    /// The returned pointer is valid for as long as this `MacOSWindow` is
+    /// alive; the caller does not gain ownership (mkgraphic still manages
+    /// the window's lifetime).
+    pub fn native_window_handle(&self) -> *mut std::ffi::c_void {
+        Retained::as_ptr(&self.window) as *mut std::ffi::c_void
+    }
 }

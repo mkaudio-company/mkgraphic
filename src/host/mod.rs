@@ -282,9 +282,20 @@ impl Window {
         self.view.refresh();
     }
 
-    /// Returns the platform window handle.
+    /// Returns the platform native window handle (macOS: `NSWindow*`), for
+    /// embedding externally-managed content into the window instead of
+    /// using mkgraphic's own element tree for it.
     pub fn handle(&self) -> Option<WindowHandle> {
-        self.handle
+        #[cfg(target_os = "macos")]
+        {
+            self.macos_window
+                .as_ref()
+                .map(|window| window.native_window_handle())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.handle
+        }
     }
 }
 
