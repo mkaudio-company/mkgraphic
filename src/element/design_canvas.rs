@@ -349,8 +349,9 @@ impl Element for DesignCanvas {
         if let Some(index) = self.hit_child(ctx, p) {
             if let Some(child_rect) = self.child_rect(index) {
                 let child_ctx = ctx.with_bounds(child_rect);
-                if let Some(hit) =
-                    self.children[index].content.hit_test(&child_ctx, p, leaf, control)
+                if let Some(hit) = self.children[index]
+                    .content
+                    .hit_test(&child_ctx, p, leaf, control)
                 {
                     return Some(hit);
                 }

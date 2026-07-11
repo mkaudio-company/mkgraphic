@@ -89,7 +89,9 @@ impl CodeEditor {
             .ok()
             .and_then(|_| {
                 tree_sitter::Query::new(&tree_sitter_rust::LANGUAGE.into(), RUST_HIGHLIGHT_QUERY)
-                    .map_err(|err| log::warn!("code_editor: highlight query failed to compile: {err}"))
+                    .map_err(|err| {
+                        log::warn!("code_editor: highlight query failed to compile: {err}")
+                    })
                     .ok()
             });
 
@@ -465,7 +467,12 @@ impl CodeEditor {
         }
     }
 
-    fn draw_selection_and_text(&self, ctx: &Context, first_visible_line: usize, visible_lines: usize) {
+    fn draw_selection_and_text(
+        &self,
+        ctx: &Context,
+        first_visible_line: usize,
+        visible_lines: usize,
+    ) {
         let mut canvas = ctx.canvas.borrow_mut();
         let theme = get_theme();
         canvas.font(theme.text_box_font);
@@ -493,7 +500,12 @@ impl CodeEditor {
                     let x2 = text_left
                         + canvas.text_width_to_position(line, end_col.min(line.chars().count()));
                     canvas.fill_style(self.highlight_select_color);
-                    canvas.fill_rect(Rect::new(x1, y_top, x2.max(x1 + 2.0), y_top + self.line_height));
+                    canvas.fill_rect(Rect::new(
+                        x1,
+                        y_top,
+                        x2.max(x1 + 2.0),
+                        y_top + self.line_height,
+                    ));
                 }
             }
 
@@ -533,7 +545,9 @@ impl CodeEditor {
     fn cursor_pos_from_click(&self, ctx: &Context, p: Point) -> CursorPos {
         let lines = self.lines.read().unwrap();
         let scroll = *self.scroll_offset.read().unwrap();
-        let row = (((p.y - ctx.bounds.top + scroll) / self.line_height).floor().max(0.0)) as usize;
+        let row = (((p.y - ctx.bounds.top + scroll) / self.line_height)
+            .floor()
+            .max(0.0)) as usize;
         let line = row.min(lines.len().saturating_sub(1));
         let line_text = &lines[line];
 
@@ -582,7 +596,13 @@ impl Element for CodeEditor {
         self.draw_gutter(ctx, first, visible);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         if ctx.bounds.contains(p) && self.enabled {
             Some(self)
         } else {
@@ -737,12 +757,7 @@ fn char_to_byte(line: &str, column: usize) -> usize {
 
 /// Deletes the (line, column)-addressed range `[a, b)` (order-independent)
 /// from `lines` in place, and sets `*cursor` to the range's start.
-fn delete_range_inner(
-    lines: &mut Vec<String>,
-    a: CursorPos,
-    b: CursorPos,
-    cursor: &mut CursorPos,
-) {
+fn delete_range_inner(lines: &mut Vec<String>, a: CursorPos, b: CursorPos, cursor: &mut CursorPos) {
     let (start, end) = if (a.line, a.column) <= (b.line, b.column) {
         (a, b)
     } else {
@@ -781,7 +796,11 @@ fn selection_on_line(
     if line_index < start.line || line_index > end.line {
         return None;
     }
-    let start_col = if line_index == start.line { start.column } else { 0 };
+    let start_col = if line_index == start.line {
+        start.column
+    } else {
+        0
+    };
     let end_col = if line_index == end.line {
         end.column
     } else {
