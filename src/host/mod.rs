@@ -16,7 +16,7 @@ mod linux;
 pub use macos::{MacOSApp, MacOSWindow};
 
 #[cfg(target_os = "windows")]
-pub use self::windows::{WindowsApp, WindowsWindow};
+pub use self::windows::{WindowsApp, WindowsTimer, WindowsWindow};
 
 #[cfg(target_os = "linux")]
 pub use self::linux::{LinuxApp, LinuxTimer, LinuxWindow};
