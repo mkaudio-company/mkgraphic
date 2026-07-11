@@ -5,24 +5,44 @@
 
 #![cfg(target_os = "windows")]
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, UpdateWindow, PAINTSTRUCT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BeginPaint, EndPaint, InvalidateRect, ScreenToClient, StretchDIBits, UpdateWindow, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, PAINTSTRUCT, SRCCOPY,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemServices::{MK_LBUTTON, MK_MBUTTON, MK_RBUTTON};
+use windows::Win32::UI::HiDpi::{
+    GetDpiForSystem, GetDpiForWindow, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CAPITAL, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowRect, LoadCursorW,
-    PostQuitMessage, RegisterClassW, SetCursor, SetWindowPos, ShowWindow, TranslateMessage,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_SIZENS,
-    IDC_SIZEWE, MSG, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE, WM_CHAR, WM_DESTROY,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
+    GetWindowLongPtrW, GetWindowRect, KillTimer, LoadCursorW, PostQuitMessage, RegisterClassW,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW,
+    CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
+    IDC_SIZENS, IDC_SIZEWE, MSG, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE, WM_CHAR,
+    WM_DESTROY, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_TIMER,
+    WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use crate::element::context::Context;
+use crate::element::ElementPtr;
+use crate::support::canvas::Canvas;
+use crate::support::color::Color;
 use crate::support::point::{Extent, Point};
-use crate::view::{CursorType, KeyCode, View};
+use crate::support::rect::Rect;
+use crate::view::{
+    CursorType, KeyAction, KeyCode, KeyInfo, MouseButton, MouseButtonKind, TextInfo, View,
+};
 
 /// Translates a Windows virtual key code to our KeyCode enum.
 pub fn translate_key(vk: i32) -> KeyCode {
@@ -147,11 +167,78 @@ pub fn set_cursor(cursor: CursorType) {
     }
 }
 
-/// Extracts mouse position from LPARAM.
-fn get_mouse_pos(lparam: LPARAM) -> Point {
-    let x = (lparam.0 & 0xFFFF) as i16 as f32;
-    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
-    Point::new(x, y)
+/// Extracts a client-coordinate mouse position from a mouse-message LPARAM.
+fn get_mouse_pos(lparam: LPARAM) -> POINT {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+    POINT { x, y }
+}
+
+/// Per-window state, addressed from `window_proc` via `GWLP_USERDATA` since
+/// Win32 has no equivalent of Cocoa's per-object ivars. Owned by the
+/// `WindowsWindow` that created it; freed on `WM_DESTROY` (see
+/// `window_proc`).
+#[derive(Default)]
+struct WindowState {
+    canvas: RefCell<Option<Canvas>>,
+    content: RefCell<Option<ElementPtr>>,
+    /// Logical (DPI-independent) size, matching the `Extent` semantics used
+    /// everywhere else in the element tree - not the raw pixel size Win32
+    /// APIs like `GetClientRect` report.
+    size: RefCell<Extent>,
+}
+
+/// Retrieves the state a `WindowsWindow` stashed on its `HWND`, if any.
+///
+/// # Safety
+/// `hwnd` must be a window created by [`WindowsWindow::new`] (or null/
+/// foreign, in which case this returns `None`); the returned reference's
+/// lifetime is tied to that window's lifetime, not actually `'static` -
+/// callers must not retain it past the window's destruction.
+unsafe fn window_state(hwnd: HWND) -> Option<&'static WindowState> {
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
+    ptr.as_ref()
+}
+
+/// This window's current DPI scale (96 DPI == 1.0), for converting between
+/// the physical pixels Win32 APIs report and the logical/point units the
+/// rest of mkgraphic works in - the same role `backingScaleFactor` plays on
+/// macOS, just not implicit the way AppKit makes it.
+fn window_scale(hwnd: HWND) -> f32 {
+    unsafe { GetDpiForWindow(hwnd) as f32 / 96.0 }
+}
+
+/// Dispatches `f` with a `Context` bound to `state`'s current logical size
+/// and content, if any content is set. Used by every input handler below,
+/// which all need the same throwaway `View`/`Canvas`/`Context` scaffolding
+/// that `Context` requires but that none of them actually render with.
+fn with_content_context(state: &WindowState, f: impl FnOnce(&ElementPtr, &Context)) {
+    let content_ref = state.content.borrow();
+    let Some(ref content) = *content_ref else {
+        return;
+    };
+    let size = *state.size.borrow();
+    let bounds = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: size.x,
+        bottom: size.y,
+    };
+    let Some(dummy_canvas) = Canvas::new(1, 1) else {
+        return;
+    };
+    let canvas_cell = RefCell::new(dummy_canvas);
+    let temp_view = View::new(size);
+    let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+    f(content, &ctx);
+}
+
+fn mouse_button_kind(msg: u32) -> MouseButtonKind {
+    match msg {
+        WM_RBUTTONDOWN | WM_RBUTTONUP => MouseButtonKind::Right,
+        WM_MBUTTONDOWN | WM_MBUTTONUP => MouseButtonKind::Middle,
+        _ => MouseButtonKind::Left,
+    }
 }
 
 /// Window procedure callback.
@@ -163,54 +250,401 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match msg {
         WM_DESTROY => {
+            // The state was `Box::into_raw`'d in `WindowsWindow::new`; this
+            // is the one place it's reclaimed, since `WM_DESTROY` is the
+            // last message a window receives.
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
+            if !ptr.is_null() {
+                drop(Box::from_raw(ptr));
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
             PostQuitMessage(0);
             LRESULT(0)
         }
         WM_PAINT => {
+            if let Some(state) = window_state(hwnd) {
+                paint(hwnd, state);
+            }
             let mut ps = PAINTSTRUCT::default();
-            let _hdc = BeginPaint(hwnd, &mut ps);
-            // Would do drawing here using the view
-            EndPaint(hwnd, &ps);
+            let _ = BeginPaint(hwnd, &mut ps);
+            let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_SIZE => {
-            // Handle resize
+            if let Some(state) = window_state(hwnd) {
+                let width = (lparam.0 & 0xFFFF) as u32 as f32;
+                let height = ((lparam.0 >> 16) & 0xFFFF) as u32 as f32;
+                let scale = window_scale(hwnd);
+                *state.size.borrow_mut() = Extent::new(width / scale, height / scale);
+                let _ = InvalidateRect(hwnd, None, false);
+            }
             LRESULT(0)
         }
         WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN
         | WM_MBUTTONUP => {
-            // Handle mouse clicks
+            if let Some(state) = window_state(hwnd) {
+                let down = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN);
+                let scale = window_scale(hwnd);
+                let raw = get_mouse_pos(lparam);
+                let pos = Point::new(raw.x as f32 / scale, raw.y as f32 / scale);
+
+                let mouse_btn = MouseButton {
+                    down,
+                    click_count: 1,
+                    button: mouse_button_kind(msg),
+                    modifiers: get_modifiers(),
+                    pos,
+                };
+
+                with_content_context(state, |content, ctx| {
+                    // Clear focus before dispatching the click, same reasoning
+                    // as the macOS backend: if the click lands on a focusable
+                    // control, that control's own re-focus in handle_click
+                    // must not be immediately wiped out afterward.
+                    if down {
+                        content.clear_focus();
+                    }
+                    let _ = content.handle_click(ctx, mouse_btn);
+                });
+                let _ = InvalidateRect(hwnd, None, false);
+            }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            // Handle mouse movement
+            if let Some(state) = window_state(hwnd) {
+                // Only forward as a drag while a button is actually held,
+                // matching the macOS backend (which only wires up
+                // `mouseDragged:`, not plain `mouseMoved:`/hover tracking).
+                let buttons_down =
+                    (wparam.0 & (MK_LBUTTON.0 | MK_RBUTTON.0 | MK_MBUTTON.0) as usize) != 0;
+                if buttons_down {
+                    let scale = window_scale(hwnd);
+                    let raw = get_mouse_pos(lparam);
+                    let pos = Point::new(raw.x as f32 / scale, raw.y as f32 / scale);
+
+                    let mouse_btn = MouseButton {
+                        down: true,
+                        click_count: 1,
+                        button: MouseButtonKind::Left,
+                        modifiers: get_modifiers(),
+                        pos,
+                    };
+
+                    with_content_context(state, |content, ctx| {
+                        content.handle_drag(ctx, mouse_btn);
+                    });
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
+            }
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
-            // Handle scroll
+            if let Some(state) = window_state(hwnd) {
+                // Unlike the other mouse messages, WM_MOUSEWHEEL's lParam is
+                // in *screen* coordinates - convert to client coordinates
+                // before use.
+                let mut pt = get_mouse_pos(lparam);
+                let _ = ScreenToClient(hwnd, &mut pt);
+
+                let scale = window_scale(hwnd);
+                let pos = Point::new(pt.x as f32 / scale, pt.y as f32 / scale);
+
+                let wheel_delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as f32 / 120.0;
+                let dir = Point::new(0.0, wheel_delta);
+
+                with_content_context(state, |content, ctx| {
+                    if content.handle_scroll(ctx, dir, pos) {
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
+                });
+            }
             LRESULT(0)
         }
         WM_KEYDOWN | WM_KEYUP => {
-            // Handle keyboard
+            if let Some(state) = window_state(hwnd) {
+                let key = translate_key(wparam.0 as i32);
+                let action = if msg == WM_KEYDOWN {
+                    KeyAction::Press
+                } else {
+                    KeyAction::Release
+                };
+                let key_info = KeyInfo {
+                    key,
+                    action,
+                    modifiers: get_modifiers(),
+                };
+
+                with_content_context(state, |content, ctx| {
+                    if content.handle_key(ctx, key_info) {
+                        let _ = InvalidateRect(hwnd, None, false);
+                    }
+                });
+            }
             LRESULT(0)
         }
         WM_CHAR => {
-            // Handle text input
+            if let Some(state) = window_state(hwnd) {
+                // WM_CHAR delivers one UTF-16 code unit per message; this
+                // doesn't reassemble surrogate pairs (characters outside the
+                // BMP), matching the scope of everything else here as a
+                // first real implementation rather than a complete IME/
+                // Unicode-input pipeline.
+                if let Some(c) = char::from_u32(wparam.0 as u32) {
+                    if !c.is_control() || c == '\n' || c == '\t' {
+                        let text_info = TextInfo {
+                            codepoint: c,
+                            modifiers: get_modifiers(),
+                        };
+                        with_content_context(state, |content, ctx| {
+                            if content.handle_text(ctx, text_info) {
+                                let _ = InvalidateRect(hwnd, None, false);
+                            }
+                        });
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            timer_proc(hwnd, msg, wparam.0, 0);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
 
-/// Windows application wrapper.
-pub struct WindowsApp {
-    // Application state
+/// Renders `state`'s content into its canvas and blits it to `hwnd`. Called
+/// from `WM_PAINT`, before the real `BeginPaint`/`EndPaint` pair (which
+/// exist mainly to satisfy Windows' internal update-region bookkeeping;
+/// GDI drawing itself happens against a plain `GetDC`, mirroring how the
+/// macOS backend draws against whatever `NSGraphicsContext` is current
+/// rather than something tied to `drawRect:`'s parameter).
+fn paint(hwnd: HWND, state: &WindowState) {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        let pixel_width = (rect.right - rect.left).max(0) as u32;
+        let pixel_height = (rect.bottom - rect.top).max(0) as u32;
+        if pixel_width == 0 || pixel_height == 0 {
+            return;
+        }
+
+        let scale = window_scale(hwnd);
+        let logical_size = Extent::new(pixel_width as f32 / scale, pixel_height as f32 / scale);
+        *state.size.borrow_mut() = logical_size;
+
+        {
+            let mut canvas_opt = state.canvas.borrow_mut();
+            let needs_new = match &*canvas_opt {
+                Some(c) => c.width() != pixel_width || c.height() != pixel_height,
+                None => true,
+            };
+            if needs_new {
+                *canvas_opt = Canvas::new(pixel_width, pixel_height);
+            }
+        }
+
+        let mut canvas_opt = state.canvas.borrow_mut();
+        let Some(ref mut canvas) = *canvas_opt else {
+            return;
+        };
+
+        canvas.clear(Color::new(0.2, 0.2, 0.2, 1.0));
+
+        // Establish the HiDPI base scale, same role as on macOS: element
+        // drawing operates entirely in logical points, so the canvas'
+        // transform must scale that up to fill its physical-pixel buffer.
+        canvas.reset_transform();
+        canvas.scale(scale, scale);
+
+        let content_ref = state.content.borrow();
+        if let Some(ref content) = *content_ref {
+            let bounds = Rect {
+                left: 0.0,
+                top: 0.0,
+                right: logical_size.x,
+                bottom: logical_size.y,
+            };
+
+            let mut temp_view = View::new(logical_size);
+            temp_view.set_scale(scale);
+
+            let temp_canvas = std::mem::replace(canvas, Canvas::new(1, 1).unwrap());
+            let canvas_cell = RefCell::new(temp_canvas);
+            let ctx = Context::new(&temp_view, &canvas_cell, bounds);
+
+            content.draw(&ctx);
+
+            *canvas = canvas_cell.into_inner();
+        }
+        drop(content_ref);
+
+        blit_to_window(hwnd, canvas, pixel_width, pixel_height);
+    }
 }
+
+/// Blits `canvas` onto `hwnd`'s client area. Unlike the macOS backend's
+/// blit (which maps a physical-pixel-resolution image onto a
+/// logical-point-sized destination rect, since CoreGraphics separates the
+/// two), Win32 GDI works in device pixels natively - `canvas`'s pixel
+/// dimensions already match the client area exactly (see `paint` above),
+/// so this is a plain 1:1 copy.
+unsafe fn blit_to_window(hwnd: HWND, canvas: &Canvas, width: u32, height: u32) {
+    let hdc = windows::Win32::Graphics::Gdi::GetDC(hwnd);
+    if hdc.is_invalid() {
+        return;
+    }
+
+    // tiny-skia stores premultiplied RGBA; GDI's `BI_RGB` DIB format is
+    // BGRA (and bottom-up unless the height is negative) - swap R/B per
+    // pixel into a scratch buffer rather than fight GDI's channel order.
+    let src = canvas.pixmap().data();
+    let mut bgra = vec![0u8; src.len()];
+    for (chunk_in, chunk_out) in src.chunks_exact(4).zip(bgra.chunks_exact_mut(4)) {
+        chunk_out[0] = chunk_in[2];
+        chunk_out[1] = chunk_in[1];
+        chunk_out[2] = chunk_in[0];
+        chunk_out[3] = chunk_in[3];
+    }
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            // Negative height = top-down DIB, matching our top-left origin
+            // (and avoiding a manual row-flip to GDI's default bottom-up).
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    StretchDIBits(
+        hdc,
+        0,
+        0,
+        width as i32,
+        height as i32,
+        0,
+        0,
+        width as i32,
+        height as i32,
+        Some(bgra.as_ptr() as *const _),
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY,
+    );
+
+    windows::Win32::Graphics::Gdi::ReleaseDC(hwnd, hdc);
+}
+
+/// One registered [`App::schedule_timer`]/[`App::schedule_once`] callback,
+/// keyed by the OS-assigned timer id `SetTimer` returns.
+struct TimerEntry {
+    callback: Box<dyn FnMut()>,
+    repeats: bool,
+}
+
+thread_local! {
+    static TIMER_CALLBACKS: RefCell<HashMap<usize, TimerEntry>> = RefCell::new(HashMap::new());
+}
+
+/// `TIMERPROC` for every app-level timer (`hwnd = None` in `SetTimer`, so
+/// Windows calls this directly via `DispatchMessage` rather than routing a
+/// `WM_TIMER` through any particular window's `window_proc`). Also invoked
+/// directly from `window_proc`'s own `WM_TIMER` arm as a fallback, in case
+/// a future caller ever schedules a window-associated timer instead.
+unsafe extern "system" fn timer_proc(_hwnd: HWND, _msg: u32, id: usize, _dwtime: u32) {
+    let entry = TIMER_CALLBACKS.with(|cbs| cbs.borrow_mut().remove(&id));
+    if let Some(mut entry) = entry {
+        (entry.callback)();
+        if entry.repeats {
+            TIMER_CALLBACKS.with(|cbs| {
+                cbs.borrow_mut().insert(id, entry);
+            });
+        } else {
+            let _ = KillTimer(None, id);
+        }
+    }
+}
+
+/// A handle to a Windows-backed timer. See `Timer` in `host/mod.rs`, which
+/// wraps this the same way it wraps the macOS `NSTimer`.
+pub struct WindowsTimer {
+    id: usize,
+}
+
+impl WindowsTimer {
+    pub fn cancel(&self) {
+        unsafe {
+            let _ = KillTimer(None, self.id);
+        }
+        TIMER_CALLBACKS.with(|cbs| {
+            cbs.borrow_mut().remove(&self.id);
+        });
+    }
+}
+
+impl Drop for WindowsTimer {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Windows application wrapper.
+pub struct WindowsApp {}
 
 impl WindowsApp {
     /// Creates a new Windows application.
     pub fn new() -> Option<Self> {
+        unsafe {
+            // Without this, Windows treats the process as DPI-unaware and
+            // bitmap-stretches the whole window on HiDPI displays (blurry,
+            // same failure mode the macOS backend had before it queried
+            // `backingScaleFactor`) rather than letting us render at the
+            // real pixel resolution ourselves.
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
         Some(Self {})
+    }
+
+    /// Schedules `callback` to run on this thread's message loop: every
+    /// `interval_secs` seconds if `repeats`, or once otherwise. Uses an
+    /// `hwnd`-less (`SetTimer(None, ...)`) timer with an explicit
+    /// `TIMERPROC`, so it fires via `DispatchMessage` independent of any
+    /// particular window - mirroring the macOS backend's app-level
+    /// `NSTimer`, which isn't tied to a window either.
+    ///
+    /// Win32 timers always repeat at the OS level; `KillTimer` from inside
+    /// `timer_proc` after a non-repeating entry's one firing is what
+    /// actually stops it (there's no "fire once" flag to pass to
+    /// `SetTimer` itself).
+    pub fn schedule_timer(
+        &self,
+        interval_secs: f64,
+        repeats: bool,
+        callback: impl FnMut() + 'static,
+    ) -> WindowsTimer {
+        let elapse_ms = ((interval_secs * 1000.0).round() as u32).max(1);
+        // When hwnd is null, Win32 ignores the requested id and returns a
+        // fresh one - that return value, not anything we pass in, is what
+        // must be used to look the callback up and to `KillTimer` it later.
+        let id = unsafe { SetTimer(None, 0, elapse_ms, Some(timer_proc)) };
+        TIMER_CALLBACKS.with(|cbs| {
+            cbs.borrow_mut().insert(
+                id,
+                TimerEntry {
+                    callback: Box::new(callback),
+                    repeats,
+                },
+            );
+        });
+        WindowsTimer { id }
     }
 
     /// Runs the application event loop.
@@ -260,6 +694,14 @@ impl WindowsWindow {
             // Convert title to wide string
             let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
 
+            // `size` is logical (point) units, matching every other backend;
+            // Win32 window creation wants physical pixels, so scale by the
+            // system DPI (the best estimate available before the window -
+            // and thus its own per-monitor DPI - exists).
+            let scale = GetDpiForSystem() as f32 / 96.0;
+            let pixel_width = (size.x * scale).round() as i32;
+            let pixel_height = (size.y * scale).round() as i32;
+
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 class_name,
@@ -267,8 +709,8 @@ impl WindowsWindow {
                 WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                size.x as i32,
-                size.y as i32,
+                pixel_width,
+                pixel_height,
                 None,
                 None,
                 instance,
@@ -277,6 +719,13 @@ impl WindowsWindow {
             if hwnd.0 == 0 {
                 return None;
             }
+
+            let state = Box::new(WindowState {
+                canvas: RefCell::new(None),
+                content: RefCell::new(None),
+                size: RefCell::new(size),
+            });
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
             Some(Self {
                 hwnd,
@@ -308,15 +757,19 @@ impl WindowsWindow {
     /// Sets the window size.
     pub fn set_size(&self, size: Extent) {
         unsafe {
+            let scale = window_scale(self.hwnd);
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
                 0,
                 0,
-                size.x as i32,
-                size.y as i32,
+                (size.x * scale).round() as i32,
+                (size.y * scale).round() as i32,
                 SWP_NOZORDER | SWP_NOMOVE,
             );
+            if let Some(state) = window_state(self.hwnd) {
+                *state.size.borrow_mut() = size;
+            }
         }
     }
 
@@ -328,6 +781,55 @@ impl WindowsWindow {
     /// Returns a mutable reference to the view.
     pub fn view_mut(&mut self) -> Option<&mut View> {
         self.view.as_mut()
+    }
+
+    /// Sets the window title.
+    pub fn set_title(&self, title: &str) {
+        let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+                self.hwnd,
+                PCWSTR(title_wide.as_ptr()),
+            );
+        }
+    }
+
+    /// Sets the window content.
+    pub fn set_content(&self, content: ElementPtr) {
+        if let Some(state) = unsafe { window_state(self.hwnd) } {
+            *state.content.borrow_mut() = Some(content);
+            unsafe {
+                let _ = InvalidateRect(self.hwnd, None, false);
+            }
+        }
+    }
+
+    /// Hides the window.
+    pub fn hide(&self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
+        }
+    }
+
+    /// Closes the window.
+    pub fn close(&self) {
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.hwnd);
+        }
+    }
+
+    /// Triggers a redraw.
+    pub fn refresh(&self) {
+        unsafe {
+            let _ = InvalidateRect(self.hwnd, None, false);
+        }
+    }
+
+    /// Returns the raw `HWND`, for embedding externally-managed native
+    /// content into this window instead of using mkgraphic's own element
+    /// tree for it - the Windows equivalent of `MacOSWindow::native_window_handle`.
+    pub fn native_window_handle(&self) -> *mut std::ffi::c_void {
+        self.hwnd.0 as *mut std::ffi::c_void
     }
 
     /// Returns the window handle.

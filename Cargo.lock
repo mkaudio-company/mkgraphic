@@ -353,6 +353,7 @@ dependencies = [
  "env_logger",
  "fontdb",
  "foreign-types",
+ "libc",
  "log",
  "objc2",
  "objc2-app-kit",

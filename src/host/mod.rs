@@ -15,6 +15,12 @@ mod linux;
 #[cfg(target_os = "macos")]
 pub use macos::{MacOSApp, MacOSWindow};
 
+#[cfg(target_os = "windows")]
+pub use self::windows::{WindowsApp, WindowsWindow};
+
+#[cfg(target_os = "linux")]
+pub use self::linux::{LinuxApp, LinuxWindow};
+
 use crate::element::ElementPtr;
 use crate::support::point::Extent;
 use crate::view::View;
@@ -148,6 +154,10 @@ pub struct Window {
     handle: Option<WindowHandle>,
     #[cfg(target_os = "macos")]
     macos_window: Option<MacOSWindow>,
+    #[cfg(target_os = "windows")]
+    windows_window: Option<WindowsWindow>,
+    #[cfg(target_os = "linux")]
+    linux_window: Option<LinuxWindow>,
 }
 
 impl Window {
@@ -158,6 +168,10 @@ impl Window {
         #[cfg(target_os = "macos")]
         let macos_window =
             { MainThreadMarker::new().map(|mtm| MacOSWindow::new(&title_str, size, mtm)) };
+        #[cfg(target_os = "windows")]
+        let windows_window = WindowsWindow::new(&title_str, size);
+        #[cfg(target_os = "linux")]
+        let linux_window = LinuxWindow::new(&title_str, size);
 
         Self {
             title: title_str,
@@ -168,6 +182,10 @@ impl Window {
             handle: None,
             #[cfg(target_os = "macos")]
             macos_window,
+            #[cfg(target_os = "windows")]
+            windows_window,
+            #[cfg(target_os = "linux")]
+            linux_window,
         }
     }
 
@@ -177,6 +195,10 @@ impl Window {
         let macos_window = {
             MainThreadMarker::new().map(|mtm| MacOSWindow::new(&builder.title, builder.size, mtm))
         };
+        #[cfg(target_os = "windows")]
+        let windows_window = WindowsWindow::new(&builder.title, builder.size);
+        #[cfg(target_os = "linux")]
+        let linux_window = LinuxWindow::new(&builder.title, builder.size);
 
         Self {
             title: builder.title,
@@ -187,6 +209,10 @@ impl Window {
             handle: None,
             #[cfg(target_os = "macos")]
             macos_window,
+            #[cfg(target_os = "windows")]
+            windows_window,
+            #[cfg(target_os = "linux")]
+            linux_window,
         }
     }
 
@@ -202,6 +228,14 @@ impl Window {
         if let Some(ref win) = self.macos_window {
             win.set_title(&self.title);
         }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.set_title(&self.title);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
+            win.set_title(&self.title);
+        }
     }
 
     /// Returns the window size.
@@ -215,6 +249,14 @@ impl Window {
         self.view.set_size(size);
         #[cfg(target_os = "macos")]
         if let Some(ref win) = self.macos_window {
+            win.set_size(size);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.set_size(size);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
             win.set_size(size);
         }
     }
@@ -244,6 +286,14 @@ impl Window {
         self.view.set_content(content.clone());
         #[cfg(target_os = "macos")]
         if let Some(ref win) = self.macos_window {
+            win.set_content(content.clone());
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.set_content(content.clone());
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
             win.set_content(content);
         }
     }
@@ -254,6 +304,14 @@ impl Window {
         if let Some(ref win) = self.macos_window {
             win.show();
         }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.show();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
+            win.show();
+        }
     }
 
     /// Hides the window.
@@ -262,12 +320,28 @@ impl Window {
         if let Some(ref win) = self.macos_window {
             win.hide();
         }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.hide();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
+            win.hide();
+        }
     }
 
     /// Closes the window.
     pub fn close(&mut self) {
         #[cfg(target_os = "macos")]
         if let Some(ref win) = self.macos_window {
+            win.close();
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.close();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
             win.close();
         }
     }
@@ -293,11 +367,20 @@ impl Window {
         if let Some(ref win) = self.macos_window {
             win.refresh();
         }
+        #[cfg(target_os = "windows")]
+        if let Some(ref win) = self.windows_window {
+            win.refresh();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref win) = self.linux_window {
+            win.refresh();
+        }
     }
 
-    /// Returns the platform native window handle (macOS: `NSWindow*`), for
-    /// embedding externally-managed content into the window instead of
-    /// using mkgraphic's own element tree for it.
+    /// Returns the platform native window handle (macOS: `NSWindow*`,
+    /// Windows: `HWND`, Linux: X11 window ID), for embedding
+    /// externally-managed content into the window instead of using
+    /// mkgraphic's own element tree for it.
     pub fn handle(&self) -> Option<WindowHandle> {
         #[cfg(target_os = "macos")]
         {
@@ -305,7 +388,19 @@ impl Window {
                 .as_ref()
                 .map(|window| window.native_window_handle())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_window
+                .as_ref()
+                .map(|window| window.native_window_handle())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.linux_window
+                .as_ref()
+                .map(|window| window.native_window_handle())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             self.handle
         }
@@ -317,6 +412,10 @@ pub struct App {
     running: bool,
     #[cfg(target_os = "macos")]
     macos_app: Option<MacOSApp>,
+    #[cfg(target_os = "windows")]
+    windows_app: Option<WindowsApp>,
+    #[cfg(target_os = "linux")]
+    linux_app: Option<LinuxApp>,
 }
 
 impl App {
@@ -329,7 +428,21 @@ impl App {
                 macos_app: MacOSApp::new(),
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            Self {
+                running: false,
+                windows_app: WindowsApp::new(),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                running: false,
+                linux_app: LinuxApp::new(),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             Self { running: false }
         }
@@ -344,6 +457,18 @@ impl App {
                 app.run();
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(ref app) = self.windows_app {
+                app.run();
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(ref mut app) = self.linux_app {
+                app.run();
+            }
+        }
     }
 
     /// Stops the application.
@@ -352,6 +477,18 @@ impl App {
         #[cfg(target_os = "macos")]
         {
             if let Some(ref app) = self.macos_app {
+                app.stop();
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(ref app) = self.windows_app {
+                app.stop();
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(ref mut app) = self.linux_app {
                 app.stop();
             }
         }
@@ -380,16 +517,26 @@ impl App {
     /// language server's diagnostics impossible without blocking the UI
     /// thread until the work finished.
     ///
-    /// macOS only for now -- the Windows backend's message loop and the
-    /// Linux/X11 backend's event loop (which doesn't yet dispatch even
-    /// basic mouse/key events into the element tree) would each need their
-    /// own real integration, not a stub that silently never fires.
-    #[cfg(target_os = "macos")]
+    /// Covers macOS, Windows, and Linux/X11.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     pub fn schedule_timer(&self, interval_secs: f64, callback: impl FnMut() + 'static) -> Timer {
+        #[cfg(target_os = "macos")]
         let inner = self
             .macos_app
             .as_ref()
             .expect("App::new should have created a MacOSApp")
+            .schedule_timer(interval_secs, true, callback);
+        #[cfg(target_os = "windows")]
+        let inner = self
+            .windows_app
+            .as_ref()
+            .expect("App::new should have created a WindowsApp")
+            .schedule_timer(interval_secs, true, callback);
+        #[cfg(target_os = "linux")]
+        let inner = self
+            .linux_app
+            .as_ref()
+            .expect("App::new should have created a LinuxApp")
             .schedule_timer(interval_secs, true, callback);
         Timer { inner }
     }
@@ -399,19 +546,40 @@ impl App {
     /// primitive). Unlike [`Self::schedule_timer`], the caller doesn't need
     /// to hold on to anything: the timer invalidates itself immediately
     /// after firing once.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     pub fn schedule_once(&self, callback: impl FnOnce() + 'static) {
         // `schedule_timer` takes `FnMut`; wrap the `FnOnce` in an `Option`
         // so it can be called through a `&mut self` closure while only
         // ever actually running the inner callback the one time it fires
-        // (`repeats: false` in the underlying `NSTimer`, so there's no
-        // second call to worry about, but `FnMut`'s type still requires
-        // something callable more than once in principle).
+        // (`repeats: false`, so there's no second call to worry about, but
+        // `FnMut`'s type still requires something callable more than once
+        // in principle).
         let mut callback = Some(callback);
+        #[cfg(target_os = "macos")]
         let inner = self
             .macos_app
             .as_ref()
             .expect("App::new should have created a MacOSApp")
+            .schedule_timer(0.0, false, move || {
+                if let Some(callback) = callback.take() {
+                    callback();
+                }
+            });
+        #[cfg(target_os = "windows")]
+        let inner = self
+            .windows_app
+            .as_ref()
+            .expect("App::new should have created a WindowsApp")
+            .schedule_timer(0.0, false, move || {
+                if let Some(callback) = callback.take() {
+                    callback();
+                }
+            });
+        #[cfg(target_os = "linux")]
+        let inner = self
+            .linux_app
+            .as_ref()
+            .expect("App::new should have created a LinuxApp")
             .schedule_timer(0.0, false, move || {
                 if let Some(callback) = callback.take() {
                     callback();
@@ -434,6 +602,16 @@ pub struct Timer {
     inner: objc2::rc::Retained<objc2_foundation::NSTimer>,
 }
 
+#[cfg(target_os = "windows")]
+pub struct Timer {
+    inner: WindowsTimer,
+}
+
+#[cfg(target_os = "linux")]
+pub struct Timer {
+    inner: LinuxTimer,
+}
+
 #[cfg(target_os = "macos")]
 impl Timer {
     /// Stops future firings. Also happens automatically on drop.
@@ -444,7 +622,23 @@ impl Timer {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "windows")]
+impl Timer {
+    /// Stops future firings. Also happens automatically on drop.
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Timer {
+    /// Stops future firings. Also happens automatically on drop.
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 impl Drop for Timer {
     fn drop(&mut self) {
         self.cancel();

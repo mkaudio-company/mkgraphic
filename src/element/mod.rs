@@ -53,6 +53,7 @@ pub mod text_box;
 pub mod thumbwheel;
 pub mod tile;
 pub mod tooltip;
+pub mod tree;
 
 use std::any::Any;
 use std::sync::{Arc, Weak};

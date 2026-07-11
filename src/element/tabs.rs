@@ -268,7 +268,11 @@ impl TabBar {
                 for (i, tab) in tabs.iter().enumerate() {
                     let width = tab.label.len() as f32 * theme.label_font_size * 0.6
                         + self.tab_padding * 2.0
-                        + if tab.closable { self.close_button_size + self.tab_padding * 0.5 } else { 0.0 };
+                        + if tab.closable {
+                            self.close_button_size + self.tab_padding * 0.5
+                        } else {
+                            0.0
+                        };
                     if i == index {
                         return Rect::new(x, bar.top, x + width, bar.bottom);
                     }
@@ -375,7 +379,10 @@ impl TabBar {
                 };
                 canvas.fill_style(close_color);
                 canvas.font_size(theme.label_font_size * 0.9);
-                canvas.fill_text("\u{00d7}", Point::new(close.left, close.center().y + theme.label_font_size * 0.32));
+                canvas.fill_text(
+                    "\u{00d7}",
+                    Point::new(close.left, close.center().y + theme.label_font_size * 0.32),
+                );
             }
         }
     }
@@ -416,7 +423,13 @@ impl Element for TabBar {
         self.draw_tabs(ctx, &tabs);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         // Unlike the other containers here, `tabs` sits behind a `RwLock`
         // (needed so `add_tab`/`remove_tab` can mutate it through `&self` at
         // runtime -- see that field's doc comment) rather than being a

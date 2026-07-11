@@ -7,6 +7,8 @@
 
 use std::cell::RefCell;
 
+use block2::RcBlock;
+use core::ptr::NonNull;
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::context::CGContext;
 use core_graphics::data_provider::CGDataProvider;
@@ -18,8 +20,6 @@ use objc2_app_kit::{
     NSGraphicsContext, NSMenu, NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
-use block2::RcBlock;
-use core::ptr::NonNull;
 
 use crate::element::context::Context;
 use crate::element::ElementPtr;

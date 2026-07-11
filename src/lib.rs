@@ -85,6 +85,7 @@ pub mod prelude {
         thumbwheel::{thumbwheel, Thumbwheel},
         tile::{htile, vtile, HTile, VTile},
         tooltip::{tooltip, Tooltip},
+        tree::{tree_node, tree_view, TreeNode, TreeView},
         Element, ElementPtr, ViewLimits, ViewStretch, WeakElementPtr,
     };
     pub use crate::host::{App, Window};
