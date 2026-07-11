@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "mkgraphic"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "bitflags 2.10.0",
  "block2",

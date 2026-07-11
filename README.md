@@ -4,11 +4,12 @@
 
 # mkgraphic
 
-A Rust port of the [cycfi/elements](https://github.com/cycfi/elements) C++ GUI framework.
+A Rust GUI framework that started as a port of the
+[cycfi/elements](https://github.com/cycfi/elements) C++ framework and has since grown past it: alongside the original element/layout models, and the ability to embed externally-managed native content in an mkgraphic-owned window.
 
 ## Overview
 
-mkgraphic is a lightweight, modular GUI framework for Rust that provides an element-based architecture for building user interfaces. It follows the design principles of the original Elements library while leveraging Rust's safety guarantees and modern ecosystem.
+mkgraphic is a lightweight, modular GUI framework for Rust that provides an element-based architecture for building user interfaces. It follows the design principles of the original Elements library while leveraging Rust's safety guarantees and modern ecosystem - and where a use case calls for something the original didn't have (a real code editor, a free-form design surface, native interop), mkgraphic adds it as its own primitive rather than staying a strict port.
 
 ## Features
 
@@ -19,6 +20,9 @@ mkgraphic is a lightweight, modular GUI framework for Rust that provides an elem
 - **Theming** - Built-in support for dark and light themes
 - **Event handling** - Mouse, keyboard, focus, and drag-and-drop support
 - **Text rendering** - Full text shaping with rustybuzz and proper text measurement
+- **Code editing** - Multi-line editor with a line-number gutter, undo/redo, and tree-sitter syntax highlighting
+- **Visual design surface** - Free-form canvas for absolute positioning, drag-to-move/resize, and edge/sibling snap guides
+- **Native window embedding** - Get the platform's real window handle (e.g. `NSWindow*` on macOS) to host externally-managed content alongside mkgraphic's own element tree
 
 ## Widgets
 
@@ -40,6 +44,8 @@ mkgraphic is a lightweight, modular GUI framework for Rust that provides an elem
 - **StatusBar** - Status bar with segments
 - **Grid** - Grid layout container
 - **NativeMenuBar** - Native OS menu bar integration
+- **CodeEditor** - Multi-line code editor with line numbers, undo/redo, and tree-sitter syntax highlighting (Rust grammar out of the box)
+- **DesignCanvas** - Free-form container for absolute-positioned children with click-to-select, drag-to-move, corner/edge resize handles, and snap guides against sibling edges
 
 ## Project Structure
 
@@ -81,7 +87,9 @@ src/
 │   ├── status_bar.rs   # Status bar
 │   ├── grid.rs         # Grid layout
 │   ├── floating.rs     # Floating elements
-│   └── scroll.rs       # Scroll view
+│   ├── scroll.rs       # Scroll view
+│   ├── code_editor.rs  # Multi-line code editor + tree-sitter highlighting
+│   └── design_canvas.rs # Free-form visual layout surface
 ├── view/               # View management
 │   └── mod.rs          # Events and input handling
 └── host/               # Platform layer
@@ -96,6 +104,7 @@ src/
 - `tiny-skia` - Pure Rust 2D graphics
 - `fontdb` / `rustybuzz` / `ttf-parser` - Font handling and text shaping
 - `bitflags` - Modifier key flags
+- `tree-sitter` / `tree-sitter-rust` / `streaming-iterator` - Incremental parsing and syntax highlighting for `CodeEditor` (Rust grammar bundled; the parsing setup is generic enough to add other languages' grammars later)
 
 ### Platform-specific
 - **macOS**: `objc2`, `objc2-foundation`, `objc2-app-kit`
@@ -194,6 +203,59 @@ fn main() {
     app.run();
 }
 ```
+
+### Code Editor Example
+
+```rust
+use mkgraphic::element::{code_editor, margin, share};
+
+let editor = margin(5.0, code_editor()
+    .width(420.0)
+    .height(240.0)
+    .text("fn main() {\n    println!(\"Hello!\");\n}\n")
+    .on_change(|text| println!("Buffer changed ({} bytes)", text.len())));
+```
+
+Ships with Rust highlighting; undo/redo are wired to Cmd/Ctrl-Z and
+Cmd/Ctrl-Shift-Z (or Ctrl-Y) out of the box.
+
+### Design Canvas Example
+
+```rust
+use mkgraphic::element::{button, design_canvas, label};
+use mkgraphic::support::rect::Rect;
+
+let mut canvas = design_canvas(420.0, 240.0)
+    .on_selection_changed(|index| println!("Selected: {:?}", index))
+    .on_layout_changed(|| println!("Layout changed"));
+
+canvas.add_child(button("Gain").on_click(|| println!("Gain clicked")), Rect::new(20.0, 20.0, 140.0, 60.0));
+canvas.add_child(label("Output"), Rect::new(160.0, 20.0, 260.0, 60.0));
+```
+
+Children are positioned absolutely (not flow-laid-out); drag a child to
+move it, drag a corner/edge handle to resize it, and dragging near a
+sibling's edge snaps to it with a guide line.
+
+### Native Window Embedding Example
+
+```rust
+use mkgraphic::prelude::*;
+
+let window = Window::new("Host Window", Extent::new(800.0, 600.0));
+
+// Real platform pointer (NSWindow* on macOS) for attaching content another
+// library manages itself, instead of mkgraphic's own element tree.
+if let Some(handle) = window.handle() {
+    // e.g. hand `handle` to a library that wants an NSWindow* to attach
+    // its own NSView-backed content to.
+}
+```
+
+`Window::handle()` no longer always returns `None` - it returns the real
+native window handle so an mkgraphic-created window can host content that
+another library renders and manages itself. mkgraphic still owns the
+window's lifetime either way.
 
 ## Architecture
 
@@ -329,4 +391,6 @@ MIT
 
 ## Acknowledgments
 
-This project is a Rust translation of the [Elements](https://github.com/cycfi/elements) C++ GUI library by Joel de Guzman and Cycfi Research.
+This project began as a Rust translation of the [Elements](https://github.com/cycfi/elements) C++ GUI library by Joel de Guzman and Cycfi Research, and its core element/layout model still follows Elements' design. It has since grown beyond a strict port - the code editor, design canvas, and native window embedding described above have no equivalent in the original library and are mkgraphic's own additions.
+
+Also uses [tree-sitter](https://github.com/tree-sitter/tree-sitter) and its [Rust grammar](https://github.com/tree-sitter/tree-sitter-rust) for `CodeEditor`'s syntax highlighting.
