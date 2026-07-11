@@ -550,9 +550,9 @@ impl LinuxApp {
 
                 // X11 represents the scroll wheel as button presses (4/5 =
                 // vertical, 6/7 = horizontal) rather than a distinct event.
-                match u8::from(e.detail) {
-                    4 | 5 | 6 | 7 if down => {
-                        let dir = match u8::from(e.detail) {
+                match e.detail {
+                    4..=7 if down => {
+                        let dir = match e.detail {
                             4 => Point::new(0.0, 1.0),
                             5 => Point::new(0.0, -1.0),
                             6 => Point::new(-1.0, 0.0),
@@ -562,7 +562,7 @@ impl LinuxApp {
                             let _ = content.handle_scroll(ctx, dir, pos);
                         });
                     }
-                    4 | 5 | 6 | 7 => {
+                    4..=7 => {
                         // The matching release for a scroll "click" - nothing to do.
                     }
                     button => {
