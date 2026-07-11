@@ -24,6 +24,15 @@ pub struct ScrollView {
     content: Option<ElementPtr>,
     scroll_offset: RwLock<Point>,
     content_size: RwLock<Point>,
+    /// Whether `content_size()` was called explicitly. When it wasn't (the
+    /// common case), `content_size` defaulting to a fixed 400x400 caused a
+    /// real bug: any content narrower/shorter than the view (e.g. a file
+    /// tree in a 240pt sidebar) got centered/measured against that
+    /// unrelated 400pt box instead of the view's actual width, visibly
+    /// shifting row content off to one side. `refresh_auto_content_size`
+    /// replaces the stored value with the content's real size whenever this
+    /// is false.
+    content_size_explicit: bool,
     h_scrollbar: ScrollbarVisibility,
     v_scrollbar: ScrollbarVisibility,
     scrollbar_color: Color,
@@ -45,6 +54,7 @@ impl ScrollView {
             content: None,
             scroll_offset: RwLock::new(Point::zero()),
             content_size: RwLock::new(Point::new(400.0, 400.0)),
+            content_size_explicit: false,
             h_scrollbar: ScrollbarVisibility::Auto,
             v_scrollbar: ScrollbarVisibility::Auto,
             scrollbar_color: theme.scrollbar_color,
@@ -65,10 +75,31 @@ impl ScrollView {
         self
     }
 
-    /// Sets the content size.
-    pub fn content_size(self, width: f32, height: f32) -> Self {
+    /// Sets the content size explicitly, opting out of the default
+    /// behavior of auto-sizing to the content's own layout each frame.
+    pub fn content_size(mut self, width: f32, height: f32) -> Self {
         *self.content_size.write().unwrap() = Point::new(width, height);
+        self.content_size_explicit = true;
         self
+    }
+
+    /// Recomputes `content_size` from the content's own `limits()` (width
+    /// floored to the view's width so content isn't measured/centered
+    /// against a a mismatched box; height taken from its natural stacked
+    /// min height) unless `content_size()` was called explicitly. Called
+    /// from `draw`/`hit_test`, which run every frame/pointer-move, so the
+    /// cache stays fresh across resizes and content changes without needing
+    /// a separate invalidation signal.
+    fn refresh_auto_content_size(&self, ctx: &Context) {
+        if self.content_size_explicit {
+            return;
+        }
+        if let Some(content) = &self.content {
+            let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
+            let limits = content.limits(&basic_ctx);
+            *self.content_size.write().unwrap() =
+                Point::new(self.width.max(limits.min.x), limits.min.y.max(self.height));
+        }
     }
 
     /// Sets the view size.
@@ -325,6 +356,7 @@ impl Element for ScrollView {
     }
 
     fn draw(&self, ctx: &Context) {
+        self.refresh_auto_content_size(ctx);
         let viewport = self.viewport_rect(ctx);
         let scroll = *self.scroll_offset.read().unwrap();
         let content_size = *self.content_size.read().unwrap();
@@ -339,15 +371,20 @@ impl Element for ScrollView {
                 viewport.top - scroll.y + content_size.y,
             );
 
-            // Clip to viewport (simplified - would need proper clipping)
             let content_ctx = ctx.with_bounds(content_bounds);
+            let mut canvas = ctx.canvas.borrow_mut();
+            canvas.save();
+            canvas.clip(viewport);
+            drop(canvas);
             content.draw(&content_ctx);
+            ctx.canvas.borrow_mut().restore();
         }
 
         self.draw_scrollbars(ctx);
     }
 
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
+        self.refresh_auto_content_size(ctx);
         if !ctx.bounds.contains(p) {
             return None;
         }

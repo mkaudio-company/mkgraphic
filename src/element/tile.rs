@@ -14,6 +14,17 @@ use std::sync::RwLock;
 pub struct VTile {
     inner: Composite,
     tiles: RwLock<Vec<f32>>,
+    /// The height `tiles` was last computed for, so `bounds_of` can tell a
+    /// genuinely-stale cache (window/parent resized) apart from "just
+    /// computed" -- previously this only checked whether the last `tiles`
+    /// entry was `0.0`, which meant a resize (to a *different* nonzero
+    /// height) was never detected at all: the cache would freeze at
+    /// whatever height happened to be current on the very first layout
+    /// pass (sometimes a transient placeholder size reported before the
+    /// real window frame is established) and every child would keep
+    /// drawing at those stale offsets forever, overlapping instead of
+    /// stacking once the real size differed.
+    cached_height: RwLock<f32>,
     /// Index of the child currently capturing mouse drag events, if any.
     drag_capture: RwLock<Option<usize>>,
 }
@@ -24,6 +35,7 @@ impl VTile {
         Self {
             inner: Composite::new(),
             tiles: RwLock::new(Vec::new()),
+            cached_height: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -34,6 +46,7 @@ impl VTile {
         Self {
             inner: Composite::from_vec(children),
             tiles: RwLock::new(vec![0.0; len + 1]),
+            cached_height: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -42,6 +55,7 @@ impl VTile {
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
         self.tiles.write().unwrap().push(0.0);
+        *self.cached_height.get_mut().unwrap() = -1.0;
     }
 
     fn compute_layout(&self, ctx: &BasicContext, height: f32) -> Vec<f32> {
@@ -110,18 +124,20 @@ impl Storage for VTile {
 
 impl CompositeBase for VTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        // Compute layout if needed
-        // tiles should have count+1 elements, and the last element should be non-zero if properly computed
+        // Compute layout if needed: recompute whenever the child count
+        // changed OR the available height differs from whatever height the
+        // cache holds (not just when the cache looks freshly-zeroed --
+        // that alone missed every resize to a different nonzero height).
         let count = self.inner.len();
+        let height = ctx.bounds.height();
         {
             let mut tiles = self.tiles.write().unwrap();
-            // Recompute if wrong size or not yet computed (last element is 0)
-            let needs_compute = tiles.len() != count + 1
-                || (count > 0 && tiles.get(count).is_none_or(|&v| v == 0.0));
+            let needs_compute =
+                tiles.len() != count + 1 || *self.cached_height.read().unwrap() != height;
             if needs_compute && count > 0 {
                 let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
-                let height = ctx.bounds.height();
                 *tiles = self.compute_layout(&basic_ctx, height);
+                *self.cached_height.write().unwrap() = height;
             }
         }
 
@@ -364,6 +380,9 @@ impl Element for VTile {
 pub struct HTile {
     inner: Composite,
     tiles: RwLock<Vec<f32>>,
+    /// The width `tiles` was last computed for; see `VTile::cached_height`
+    /// for why this replaced the old "last entry is 0.0" staleness check.
+    cached_width: RwLock<f32>,
     /// Index of the child currently capturing mouse drag events, if any.
     drag_capture: RwLock<Option<usize>>,
 }
@@ -374,6 +393,7 @@ impl HTile {
         Self {
             inner: Composite::new(),
             tiles: RwLock::new(Vec::new()),
+            cached_width: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -384,6 +404,7 @@ impl HTile {
         Self {
             inner: Composite::from_vec(children),
             tiles: RwLock::new(vec![0.0; len + 1]),
+            cached_width: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -392,6 +413,7 @@ impl HTile {
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
         self.tiles.write().unwrap().push(0.0);
+        *self.cached_width.get_mut().unwrap() = -1.0;
     }
 
     fn compute_layout(&self, ctx: &BasicContext, width: f32) -> Vec<f32> {
@@ -458,17 +480,18 @@ impl Storage for HTile {
 
 impl CompositeBase for HTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        // Compute layout if needed
+        // See VTile::bounds_of for why this compares against the cached
+        // width rather than checking for a zeroed last entry.
         let count = self.inner.len();
+        let width = ctx.bounds.width();
         {
             let mut tiles = self.tiles.write().unwrap();
-            // Recompute if wrong size or not yet computed (last element is 0)
-            let needs_compute = tiles.len() != count + 1
-                || (count > 0 && tiles.get(count).is_none_or(|&v| v == 0.0));
+            let needs_compute =
+                tiles.len() != count + 1 || *self.cached_width.read().unwrap() != width;
             if needs_compute && count > 0 {
                 let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
-                let width = ctx.bounds.width();
                 *tiles = self.compute_layout(&basic_ctx, width);
+                *self.cached_width.write().unwrap() = width;
             }
         }
 

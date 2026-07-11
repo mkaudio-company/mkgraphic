@@ -280,6 +280,19 @@ impl Window {
     /// Triggers a refresh of the window.
     pub fn refresh(&self) {
         self.view.refresh();
+        // `View::refresh` above is a platform-agnostic no-op stub; the
+        // macOS backend's actual `setNeedsDisplay` call lives on
+        // `MacOSWindow` instead, same as every other method here that
+        // forwards to it. Without this, nothing calling `Window::refresh`
+        // (e.g. a timer callback updating a widget's text outside of any
+        // mouse/key event) ever produced a visible repaint -- confirmed by
+        // running the `timer` example and observing the status bar's text
+        // freeze after whatever the first incidental repaint happened to
+        // catch.
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.refresh();
+        }
     }
 
     /// Returns the platform native window handle (macOS: `NSWindow*`), for
@@ -353,6 +366,88 @@ impl App {
     #[cfg(target_os = "macos")]
     pub fn main_thread_marker(&self) -> Option<MainThreadMarker> {
         MainThreadMarker::new()
+    }
+
+    /// Schedules `callback` to run repeatedly on the main thread every
+    /// `interval_secs` seconds, for as long as the returned [`Timer`] is
+    /// kept alive (dropping it stops the callback -- see [`Timer`]'s own
+    /// docs). This is mkgraphic's first timer/idle-callback primitive:
+    /// previously there was no way for an app to update UI state on a
+    /// schedule rather than in direct response to an event the platform
+    /// backend was already dispatching (macOS's AppKit backend in
+    /// particular only repaints from inside its own mouse/key handlers),
+    /// which made e.g. streaming live subprocess output or auto-polling a
+    /// language server's diagnostics impossible without blocking the UI
+    /// thread until the work finished.
+    ///
+    /// macOS only for now -- the Windows backend's message loop and the
+    /// Linux/X11 backend's event loop (which doesn't yet dispatch even
+    /// basic mouse/key events into the element tree) would each need their
+    /// own real integration, not a stub that silently never fires.
+    #[cfg(target_os = "macos")]
+    pub fn schedule_timer(&self, interval_secs: f64, callback: impl FnMut() + 'static) -> Timer {
+        let inner = self
+            .macos_app
+            .as_ref()
+            .expect("App::new should have created a MacOSApp")
+            .schedule_timer(interval_secs, true, callback);
+        Timer { inner }
+    }
+
+    /// Runs `callback` once, the next time the main run loop turns (a
+    /// zero-delay, non-repeating timer -- the "idle callback" half of this
+    /// primitive). Unlike [`Self::schedule_timer`], the caller doesn't need
+    /// to hold on to anything: the timer invalidates itself immediately
+    /// after firing once.
+    #[cfg(target_os = "macos")]
+    pub fn schedule_once(&self, callback: impl FnOnce() + 'static) {
+        // `schedule_timer` takes `FnMut`; wrap the `FnOnce` in an `Option`
+        // so it can be called through a `&mut self` closure while only
+        // ever actually running the inner callback the one time it fires
+        // (`repeats: false` in the underlying `NSTimer`, so there's no
+        // second call to worry about, but `FnMut`'s type still requires
+        // something callable more than once in principle).
+        let mut callback = Some(callback);
+        let inner = self
+            .macos_app
+            .as_ref()
+            .expect("App::new should have created a MacOSApp")
+            .schedule_timer(0.0, false, move || {
+                if let Some(callback) = callback.take() {
+                    callback();
+                }
+            });
+        // Intentionally leaked: a one-shot timer has no handle for the
+        // caller to hold, and it invalidates (and the run loop drops its
+        // reference to it) right after firing once on its own.
+        std::mem::forget(inner);
+    }
+}
+
+/// A handle to a [`App::schedule_timer`] callback. Dropping this (or
+/// calling [`Self::cancel`]) stops future firings -- the timer is not kept
+/// alive by anything else once this handle is gone, so letting it drop
+/// (e.g. a local variable going out of scope) is a real, if easy to miss,
+/// way to stop a timer.
+#[cfg(target_os = "macos")]
+pub struct Timer {
+    inner: objc2::rc::Retained<objc2_foundation::NSTimer>,
+}
+
+#[cfg(target_os = "macos")]
+impl Timer {
+    /// Stops future firings. Also happens automatically on drop.
+    pub fn cancel(&self) {
+        unsafe {
+            self.inner.invalidate();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Timer {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 

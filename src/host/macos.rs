@@ -17,7 +17,9 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
     NSGraphicsContext, NSMenu, NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use block2::RcBlock;
+use core::ptr::NonNull;
 
 use crate::element::context::Context;
 use crate::element::ElementPtr;
@@ -223,6 +225,35 @@ impl MacOSApp {
         macos_app.setup_menu();
 
         Some(macos_app)
+    }
+
+    /// Schedules `callback` on the main run loop: repeatedly, every
+    /// `interval_secs` seconds, if `repeats` is true, or once after
+    /// `interval_secs` otherwise. `NSApplication::run` (called from
+    /// `MacOSApp::run`) pumps the main run loop in its default mode, which
+    /// is exactly where `scheduledTimerWithTimeInterval:` attaches the
+    /// timer, so no extra run-loop plumbing is needed here.
+    ///
+    /// The returned `Retained<NSTimer>` must be kept alive by the caller
+    /// for exactly as long as the callback should keep firing: dropping it
+    /// invalidates the timer (see `MacOSTimer`'s `Drop` impl in `mod.rs`).
+    /// Simply dropping the `Retained<NSTimer>` on its own would NOT stop
+    /// it, since the run loop keeps its own separate strong reference once
+    /// scheduled -- that's exactly why the wrapper's `Drop` explicitly
+    /// calls `invalidate()` rather than relying on refcounting.
+    pub fn schedule_timer(
+        &self,
+        interval_secs: f64,
+        repeats: bool,
+        callback: impl FnMut() + 'static,
+    ) -> Retained<NSTimer> {
+        let callback = RefCell::new(callback);
+        let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+            (callback.borrow_mut())();
+        });
+        unsafe {
+            NSTimer::scheduledTimerWithTimeInterval_repeats_block(interval_secs, repeats, &block)
+        }
     }
 
     /// Sets up the application menu bar based on configuration or defaults.

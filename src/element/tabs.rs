@@ -22,11 +22,15 @@ pub enum TabPosition {
 
 /// Callback type for tab changes.
 pub type TabChangeCallback = Box<dyn Fn(usize) + Send + Sync>;
+/// Callback type for a tab's close ("x") button being clicked. Receives the
+/// closed tab's index *before* removal.
+pub type TabCloseCallback = Box<dyn Fn(usize) + Send + Sync>;
 
 /// A single tab.
 pub struct Tab {
     label: String,
     content: Option<ElementPtr>,
+    closable: bool,
 }
 
 impl Tab {
@@ -35,6 +39,7 @@ impl Tab {
         Self {
             label: label.into(),
             content: None,
+            closable: false,
         }
     }
 
@@ -43,13 +48,28 @@ impl Tab {
         self.content = Some(share(content));
         self
     }
+
+    /// Shows a close ("x") button on this tab; clicking it fires
+    /// `TabBar::on_close` instead of activating the tab. Needed for an
+    /// editor-style tab bar (one tab per open file) where tabs are closed
+    /// individually, unlike a fixed set of view tabs.
+    pub fn closable(mut self, closable: bool) -> Self {
+        self.closable = closable;
+        self
+    }
 }
 
 /// A tabbed container element.
 pub struct TabBar {
-    tabs: Vec<Tab>,
+    /// Behind a lock (not a plain `Vec`) so tabs can be added/removed at
+    /// runtime through `&self` -- widgets are shared as `Arc<dyn Element>`
+    /// once mounted, so an owning `&mut self` is never available again
+    /// after construction. Needed for an IDE tab bar, where files get
+    /// opened/closed while the app is running.
+    tabs: RwLock<Vec<Tab>>,
     active_index: RwLock<usize>,
     hovered_index: RwLock<Option<usize>>,
+    hovered_close: RwLock<Option<usize>>,
     position: TabPosition,
     active_color: Color,
     inactive_color: Color,
@@ -59,7 +79,9 @@ pub struct TabBar {
     tab_height: f32,
     tab_padding: f32,
     corner_radius: f32,
+    close_button_size: f32,
     on_change: Option<TabChangeCallback>,
+    on_close: Option<TabCloseCallback>,
 }
 
 impl TabBar {
@@ -67,9 +89,10 @@ impl TabBar {
     pub fn new() -> Self {
         let theme = get_theme();
         Self {
-            tabs: Vec::new(),
+            tabs: RwLock::new(Vec::new()),
             active_index: RwLock::new(0),
             hovered_index: RwLock::new(None),
+            hovered_close: RwLock::new(None),
             position: TabPosition::Top,
             active_color: theme.active_tab_color,
             inactive_color: theme.inactive_tab_color,
@@ -79,14 +102,60 @@ impl TabBar {
             tab_height: 32.0,
             tab_padding: 16.0,
             corner_radius: 4.0,
+            close_button_size: 14.0,
             on_change: None,
+            on_close: None,
         }
     }
 
     /// Adds tabs.
-    pub fn tabs(mut self, tabs: Vec<Tab>) -> Self {
-        self.tabs = tabs;
+    pub fn tabs(self, tabs: Vec<Tab>) -> Self {
+        *self.tabs.write().unwrap() = tabs;
         self
+    }
+
+    /// Sets the close-button callback (only relevant for tabs created with
+    /// `Tab::closable(true)`).
+    pub fn on_close<F: Fn(usize) + Send + Sync + 'static>(mut self, callback: F) -> Self {
+        self.on_close = Some(Box::new(callback));
+        self
+    }
+
+    /// Appends a new tab at runtime and returns its index. Does not change
+    /// which tab is active.
+    pub fn add_tab(&self, tab: Tab) -> usize {
+        let mut tabs = self.tabs.write().unwrap();
+        tabs.push(tab);
+        tabs.len() - 1
+    }
+
+    /// Removes the tab at `index` at runtime. Keeps the active index
+    /// pointing at the same logical tab it did before the removal: a tab
+    /// closed *before* the active one shifts the active index down by one;
+    /// closing the active tab itself activates whichever tab slides into
+    /// its place (or the new last tab, if it was the last one open).
+    pub fn remove_tab(&self, index: usize) {
+        let mut tabs = self.tabs.write().unwrap();
+        if index >= tabs.len() {
+            return;
+        }
+        tabs.remove(index);
+        let len = tabs.len();
+        drop(tabs);
+
+        let mut active = self.active_index.write().unwrap();
+        if len == 0 {
+            *active = 0;
+        } else if index < *active {
+            *active -= 1;
+        } else if index == *active {
+            *active = (*active).min(len - 1);
+        }
+    }
+
+    /// Returns the current number of tabs.
+    pub fn tab_count(&self) -> usize {
+        self.tabs.read().unwrap().len()
     }
 
     /// Sets the tab position.
@@ -120,7 +189,7 @@ impl TabBar {
 
     /// Sets the active tab index.
     pub fn set_active(&self, index: usize) {
-        if index < self.tabs.len() {
+        if index < self.tabs.read().unwrap().len() {
             *self.active_index.write().unwrap() = index;
         }
     }
@@ -183,16 +252,23 @@ impl TabBar {
         }
     }
 
-    fn tab_rect(&self, ctx: &Context, index: usize) -> Rect {
+    /// Computes tab `index`'s rect given an already-locked `tabs` slice.
+    /// Takes the slice rather than locking `self.tabs` itself so callers
+    /// that already hold the read guard (draw/hit-test/click, which need it
+    /// for more than just this calculation) don't have to take a second,
+    /// nested lock on the same `RwLock` -- std's `RwLock` doesn't guarantee
+    /// that's deadlock-free if a writer happens to be queued in between.
+    fn tab_rect(&self, ctx: &Context, tabs: &[Tab], index: usize) -> Rect {
         let bar = self.tab_bar_rect(ctx);
         let theme = get_theme();
 
         match self.position {
             TabPosition::Top | TabPosition::Bottom => {
                 let mut x = bar.left;
-                for (i, tab) in self.tabs.iter().enumerate() {
+                for (i, tab) in tabs.iter().enumerate() {
                     let width = tab.label.len() as f32 * theme.label_font_size * 0.6
-                        + self.tab_padding * 2.0;
+                        + self.tab_padding * 2.0
+                        + if tab.closable { self.close_button_size + self.tab_padding * 0.5 } else { 0.0 };
                     if i == index {
                         return Rect::new(x, bar.top, x + width, bar.bottom);
                     }
@@ -201,7 +277,7 @@ impl TabBar {
             }
             TabPosition::Left | TabPosition::Right => {
                 let mut y = bar.top;
-                for i in 0..self.tabs.len() {
+                for i in 0..tabs.len() {
                     if i == index {
                         return Rect::new(bar.left, y, bar.right, y + self.tab_height);
                     }
@@ -213,20 +289,37 @@ impl TabBar {
         Rect::zero()
     }
 
-    fn draw_tabs(&self, ctx: &Context) {
+    /// The close ("x") button's hit/draw rect within a tab's own rect, or
+    /// `Rect::zero()` if that tab isn't closable.
+    fn close_rect(&self, tabs: &[Tab], index: usize, tab_rect: Rect) -> Rect {
+        if !tabs.get(index).is_some_and(|t| t.closable) {
+            return Rect::zero();
+        }
+        let size = self.close_button_size;
+        let y = tab_rect.center().y - size / 2.0;
+        Rect::new(
+            tab_rect.right - self.tab_padding * 0.5 - size,
+            y,
+            tab_rect.right - self.tab_padding * 0.5,
+            y + size,
+        )
+    }
+
+    fn draw_tabs(&self, ctx: &Context, tabs: &[Tab]) {
         let mut canvas = ctx.canvas.borrow_mut();
         let theme = get_theme();
         let bar = self.tab_bar_rect(ctx);
         let active = *self.active_index.read().unwrap();
         let hovered = *self.hovered_index.read().unwrap();
+        let hovered_close = *self.hovered_close.read().unwrap();
 
         // Tab bar background
         canvas.fill_style(self.background_color);
         canvas.fill_rect(bar);
 
         // Draw each tab
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let rect = self.tab_rect(ctx, i);
+        for (i, tab) in tabs.iter().enumerate() {
+            let rect = self.tab_rect(ctx, tabs, i);
 
             let is_active = i == active;
             let is_hovered = hovered == Some(i) && !is_active;
@@ -272,12 +365,24 @@ impl TabBar {
             let x = rect.left + self.tab_padding;
             let y = rect.center().y + theme.label_font_size * 0.35;
             canvas.fill_text(&tab.label, Point::new(x, y));
+
+            if tab.closable {
+                let close = self.close_rect(tabs, i, rect);
+                let close_color = if hovered_close == Some(i) {
+                    self.text_color
+                } else {
+                    self.text_color.with_alpha(0.5)
+                };
+                canvas.fill_style(close_color);
+                canvas.font_size(theme.label_font_size * 0.9);
+                canvas.fill_text("\u{00d7}", Point::new(close.left, close.center().y + theme.label_font_size * 0.32));
+            }
         }
     }
 
-    fn draw_content(&self, ctx: &Context) {
+    fn draw_content(&self, ctx: &Context, tabs: &[Tab]) {
         let active = *self.active_index.read().unwrap();
-        if let Some(tab) = self.tabs.get(active) {
+        if let Some(tab) = tabs.get(active) {
             if let Some(ref content) = tab.content {
                 let content_rect = self.content_rect(ctx);
                 let content_ctx = ctx.with_bounds(content_rect);
@@ -306,34 +411,27 @@ impl Element for TabBar {
     }
 
     fn draw(&self, ctx: &Context) {
-        self.draw_content(ctx);
-        self.draw_tabs(ctx);
+        let tabs = self.tabs.read().unwrap();
+        self.draw_content(ctx, &tabs);
+        self.draw_tabs(ctx, &tabs);
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
-        if !ctx.bounds.contains(p) {
-            return None;
+    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+        // Unlike the other containers here, `tabs` sits behind a `RwLock`
+        // (needed so `add_tab`/`remove_tab` can mutate it through `&self` at
+        // runtime -- see that field's doc comment) rather than being a
+        // plain owned `Vec`, so there's no way to hand back a `&dyn Element`
+        // borrowed from a tab's content with a lifetime tied to `&self`: the
+        // read guard needed to reach it doesn't live that long. So, like
+        // `List` (which has the same kind of `RwLock<Vec<_>>` item storage),
+        // this reports itself as the hit target rather than forwarding into
+        // nested content; `draw`/`handle_click` (which don't need to return
+        // a reference) still fully delegate to the active tab's content.
+        if ctx.bounds.contains(p) {
+            Some(self)
+        } else {
+            None
         }
-
-        // Check tabs
-        let bar = self.tab_bar_rect(ctx);
-        if bar.contains(p) {
-            return Some(self);
-        }
-
-        // Check content
-        let active = *self.active_index.read().unwrap();
-        if let Some(tab) = self.tabs.get(active) {
-            if let Some(ref content) = tab.content {
-                let content_rect = self.content_rect(ctx);
-                let content_ctx = ctx.with_bounds(content_rect);
-                if let Some(hit) = content.hit_test(&content_ctx, p, leaf, control) {
-                    return Some(hit);
-                }
-            }
-        }
-
-        Some(self)
     }
 
     fn wants_control(&self) -> bool {
@@ -349,10 +447,24 @@ impl Element for TabBar {
             return true;
         }
 
-        // Check if clicking on a tab
-        for i in 0..self.tabs.len() {
-            let rect = self.tab_rect(ctx, i);
-            if rect.contains(btn.pos) {
+        // Check if clicking on a tab (or its close button)
+        {
+            let tabs = self.tabs.read().unwrap();
+            for i in 0..tabs.len() {
+                let rect = self.tab_rect(ctx, &tabs, i);
+                if !rect.contains(btn.pos) {
+                    continue;
+                }
+
+                if self.close_rect(&tabs, i, rect).contains(btn.pos) {
+                    drop(tabs);
+                    if let Some(ref callback) = self.on_close {
+                        callback(i);
+                    }
+                    self.remove_tab(i);
+                    return true;
+                }
+
                 let old_active = *self.active_index.read().unwrap();
                 if i != old_active {
                     *self.active_index.write().unwrap() = i;
@@ -366,7 +478,8 @@ impl Element for TabBar {
 
         // Forward to content
         let active = *self.active_index.read().unwrap();
-        if let Some(tab) = self.tabs.get(active) {
+        let tabs = self.tabs.read().unwrap();
+        if let Some(tab) = tabs.get(active) {
             if let Some(ref content) = tab.content {
                 let content_rect = self.content_rect(ctx);
                 let content_ctx = ctx.with_bounds(content_rect);
@@ -383,15 +496,22 @@ impl Element for TabBar {
         match status {
             CursorTracking::Leaving => {
                 *self.hovered_index.write().unwrap() = None;
+                *self.hovered_close.write().unwrap() = None;
             }
             _ => {
                 let mut hovered = self.hovered_index.write().unwrap();
+                let mut hovered_close = self.hovered_close.write().unwrap();
                 *hovered = None;
+                *hovered_close = None;
 
-                for i in 0..self.tabs.len() {
-                    let rect = self.tab_rect(ctx, i);
+                let tabs = self.tabs.read().unwrap();
+                for i in 0..tabs.len() {
+                    let rect = self.tab_rect(ctx, &tabs, i);
                     if rect.contains(p) {
                         *hovered = Some(i);
+                        if self.close_rect(&tabs, i, rect).contains(p) {
+                            *hovered_close = Some(i);
+                        }
                         break;
                     }
                 }
