@@ -26,6 +26,10 @@ fn main() {
 }
 
 fn create_gallery() -> impl Element {
+    vtile![create_controls_gallery(), create_editor_gallery(),]
+}
+
+fn create_controls_gallery() -> impl Element {
     let radio_group = RadioGroup::new();
 
     htile![
@@ -173,6 +177,68 @@ fn create_gallery() -> impl Element {
             ]
         ),
     ]
+}
+
+fn create_editor_gallery() -> impl Element {
+    htile![
+        margin(
+            10.0,
+            vtile![
+                section_label("Code Editor (tree-sitter Rust highlighting)"),
+                margin(
+                    5.0,
+                    code_editor()
+                        .width(420.0)
+                        .height(240.0)
+                        .text(SAMPLE_RUST_SNIPPET)
+                        .on_change(|text| println!("Code editor changed ({} bytes)", text.len()))
+                ),
+            ]
+        ),
+        margin(
+            10.0,
+            vtile![
+                section_label("Design Canvas (drag to move, corner/edge handles to resize, drag near a sibling to snap)"),
+                margin(5.0, create_design_canvas_demo()),
+            ]
+        ),
+    ]
+}
+
+const SAMPLE_RUST_SNIPPET: &str = r#"// Sample file loaded into the code editor.
+use mkgraphic::prelude::*;
+
+fn greet(name: &str) -> String {
+    format!("Hello, {name}!")
+}
+
+struct Counter {
+    value: i32,
+}
+
+impl Counter {
+    fn increment(&mut self) {
+        self.value += 1;
+    }
+}
+"#;
+
+fn create_design_canvas_demo() -> impl Element {
+    let mut canvas = design_canvas(420.0, 240.0)
+        .on_selection_changed(|index| println!("Design canvas selection: {:?}", index))
+        .on_layout_changed(|| println!("Design canvas layout changed"));
+
+    canvas.add_child(
+        button("Gain").on_click(|| println!("Gain knob placeholder clicked")),
+        Rect::new(20.0, 20.0, 140.0, 60.0),
+    );
+    canvas.add_child(label("Output"), Rect::new(160.0, 20.0, 260.0, 60.0));
+    canvas.add_child(
+        button("Bypass").on_click(|| println!("Bypass placeholder clicked")),
+        Rect::new(20.0, 100.0, 140.0, 140.0),
+    );
+
+    canvas
 }
 
 fn section_label(text: &str) -> impl Element {

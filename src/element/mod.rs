@@ -29,8 +29,10 @@
 pub mod align;
 pub mod button;
 pub mod checkbox;
+pub mod code_editor;
 pub mod composite;
 pub mod context;
+pub mod design_canvas;
 pub mod dial;
 pub mod floating;
 pub mod grid;

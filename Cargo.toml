@@ -29,6 +29,12 @@ fontdb = "0.16"
 rustybuzz = "0.12"
 ttf-parser = "0.20"
 
+# Code editor syntax highlighting (incremental parsing, reused for future
+# structural features like folding/navigation, not just token coloring)
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+streaming-iterator = "0.1"
+
 # Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
