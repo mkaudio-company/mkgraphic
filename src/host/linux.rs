@@ -546,7 +546,7 @@ impl LinuxApp {
                     return;
                 };
                 let pos = Point::new(e.event_x as f32, e.event_y as f32);
-                let modifiers = translate_modifiers(e.state.0);
+                let modifiers = translate_modifiers(u16::from(e.state));
 
                 // X11 represents the scroll wheel as button presses (4/5 =
                 // vertical, 6/7 = horizontal) rather than a distinct event.
@@ -594,15 +594,16 @@ impl LinuxApp {
                 // Only forward as a drag while a button is actually held,
                 // matching the macOS/Windows backends (which don't wire up
                 // hover/plain mouse-move tracking either).
-                let buttons_down = (e.state.0
-                    & (KeyButMask::BUTTON1.0 | KeyButMask::BUTTON2.0 | KeyButMask::BUTTON3.0))
-                    != 0;
+                let held_buttons = u16::from(KeyButMask::BUTTON1)
+                    | u16::from(KeyButMask::BUTTON2)
+                    | u16::from(KeyButMask::BUTTON3);
+                let buttons_down = (u16::from(e.state) & held_buttons) != 0;
                 if buttons_down {
                     let mouse_btn = MouseButton {
                         down: true,
                         click_count: 1,
                         button: MouseButtonKind::Left,
-                        modifiers: translate_modifiers(e.state.0),
+                        modifiers: translate_modifiers(u16::from(e.state)),
                         pos: Point::new(e.event_x as f32, e.event_y as f32),
                     };
                     with_content_context(&state, |content, ctx| {
@@ -623,7 +624,7 @@ impl LinuxApp {
                     } else {
                         KeyAction::Release
                     },
-                    modifiers: translate_modifiers(e.state.0),
+                    modifiers: translate_modifiers(u16::from(e.state)),
                 };
                 let mut handled = false;
                 with_content_context(&state, |content, ctx| {
@@ -635,10 +636,10 @@ impl LinuxApp {
                 // rather than going through a proper compose/IME pipeline -
                 // enough for ASCII text entry, not for most non-Latin input.
                 if down {
-                    if let Some(c) = keycode_to_ascii(e.detail, e.state.0) {
+                    if let Some(c) = keycode_to_ascii(e.detail, u16::from(e.state)) {
                         let text_info = TextInfo {
                             codepoint: c,
-                            modifiers: translate_modifiers(e.state.0),
+                            modifiers: translate_modifiers(u16::from(e.state)),
                         };
                         with_content_context(&state, |content, ctx| {
                             handled = content.handle_text(ctx, text_info) || handled;

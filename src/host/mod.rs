@@ -19,7 +19,7 @@ pub use macos::{MacOSApp, MacOSWindow};
 pub use self::windows::{WindowsApp, WindowsWindow};
 
 #[cfg(target_os = "linux")]
-pub use self::linux::{LinuxApp, LinuxWindow};
+pub use self::linux::{LinuxApp, LinuxTimer, LinuxWindow};
 
 use crate::element::ElementPtr;
 use crate::support::point::Extent;
