@@ -3,11 +3,12 @@
 //! This module provides a high-level drawing API that wraps the underlying
 //! graphics backend (tiny-skia).
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use super::circle::Circle;
 use super::color::Color;
-use super::font::{Font, FontDatabase};
+use super::font::{Font, FontDatabase, FontStretch, FontStyle};
 use super::point::Point;
 use super::rect::Rect;
 
@@ -197,6 +198,131 @@ struct CanvasState {
     transform: tiny_skia::Transform,
     font_size: f32,
     clip_rect: Option<Rect>,
+}
+
+fn to_fontdb_style(style: FontStyle) -> fontdb::Style {
+    match style {
+        FontStyle::Normal => fontdb::Style::Normal,
+        FontStyle::Italic => fontdb::Style::Italic,
+        FontStyle::Oblique => fontdb::Style::Oblique,
+    }
+}
+
+fn to_fontdb_stretch(stretch: FontStretch) -> fontdb::Stretch {
+    match stretch {
+        FontStretch::UltraCondensed => fontdb::Stretch::UltraCondensed,
+        FontStretch::ExtraCondensed => fontdb::Stretch::ExtraCondensed,
+        FontStretch::Condensed => fontdb::Stretch::Condensed,
+        FontStretch::SemiCondensed => fontdb::Stretch::SemiCondensed,
+        FontStretch::Normal => fontdb::Stretch::Normal,
+        FontStretch::SemiExpanded => fontdb::Stretch::SemiExpanded,
+        FontStretch::Expanded => fontdb::Stretch::Expanded,
+        FontStretch::ExtraExpanded => fontdb::Stretch::ExtraExpanded,
+        FontStretch::UltraExpanded => fontdb::Stretch::UltraExpanded,
+    }
+}
+
+/// Widely-installed fonts with broad non-Latin coverage (CJK, Hangul,
+/// etc.), tried - in order - before falling back to a brute-force scan of
+/// every font loaded on the system. Order only matters for tie-breaking
+/// when more than one would work; whichever actually has the glyph wins.
+const FALLBACK_FAMILIES: &[&str] = &[
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK KR",
+    "PingFang SC",
+    "PingFang TC",
+    "PingFang HK",
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    "Microsoft YaHei",
+    "Microsoft JhengHei",
+    "SimSun",
+    "Yu Gothic",
+    "Meiryo",
+    "Noto Sans",
+    "Noto Sans Symbols",
+    "Noto Sans Symbols2",
+    "Arial Unicode MS",
+];
+
+/// True if `face_id` has a glyph for `ch` (i.e. isn't going to render as
+/// `.notdef`/tofu).
+fn face_has_glyph(font_db: &FontDatabase, face_id: fontdb::ID, ch: char) -> bool {
+    font_db
+        .inner()
+        .with_face_data(face_id, |data, index| {
+            ttf_parser::Face::parse(data, index)
+                .ok()
+                .and_then(|face| face.glyph_index(ch))
+                .is_some()
+        })
+        .unwrap_or(false)
+}
+
+/// Resolves which font face to use for a single character: the primary
+/// (requested/selected) font if it covers `ch`, otherwise the first one
+/// that does, tried among a short list of broad-coverage candidates and
+/// then every other loaded font as a last resort. Results are memoized
+/// process-wide since the same characters (spaces, common CJK syllables/
+/// ideographs, punctuation) recur constantly.
+fn resolve_face_for_char(font_db: &FontDatabase, primary: fontdb::ID, ch: char) -> fontdb::ID {
+    static CACHE: OnceLock<Mutex<HashMap<char, fontdb::ID>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(&id) = cache.lock().unwrap().get(&ch) {
+        return id;
+    }
+
+    if face_has_glyph(font_db, primary, ch) {
+        return primary;
+    }
+
+    for family in FALLBACK_FAMILIES {
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(family)],
+            weight: fontdb::Weight(400),
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+        if let Some(id) = font_db.inner().query(&query) {
+            if face_has_glyph(font_db, id, ch) {
+                cache.lock().unwrap().insert(ch, id);
+                return id;
+            }
+        }
+    }
+
+    for face in font_db.inner().faces() {
+        if face_has_glyph(font_db, face.id, ch) {
+            cache.lock().unwrap().insert(ch, face.id);
+            return face.id;
+        }
+    }
+
+    // Nothing on the system has this glyph; fall back to the primary font
+    // (renders `.notdef`, same as if no fallback logic existed at all).
+    cache.lock().unwrap().insert(ch, primary);
+    primary
+}
+
+/// Splits `text` into maximal runs of consecutive characters that resolve
+/// to the same font face, so mixed-script strings (e.g. English text with
+/// a Korean word in it) render correctly even though no single font may
+/// cover every character.
+fn text_runs(font_db: &FontDatabase, primary: fontdb::ID, text: &str) -> Vec<(fontdb::ID, String)> {
+    let mut runs: Vec<(fontdb::ID, String)> = Vec::new();
+    for ch in text.chars() {
+        let face_id = resolve_face_for_char(font_db, primary, ch);
+        match runs.last_mut() {
+            Some((id, s)) if *id == face_id => s.push(ch),
+            _ => runs.push((face_id, ch.to_string())),
+        }
+    }
+    runs
 }
 
 impl Canvas {
@@ -620,6 +746,49 @@ impl Canvas {
         }
     }
 
+    /// Resolves the fontdb face matching the canvas's currently selected
+    /// font (see [`Canvas::font`]), falling back to generic sans-serif at
+    /// regular weight if none was set or the requested family isn't
+    /// installed. This is the "primary" font for a piece of text; any
+    /// characters it doesn't cover (e.g. Korean/Japanese/Chinese text with
+    /// a Latin-only primary font) fall back per-character - see
+    /// [`resolve_face_for_char`].
+    fn primary_font_id(&self, font_db: &FontDatabase) -> Option<fontdb::ID> {
+        let weight = self
+            .current_font
+            .as_ref()
+            .map(|f| fontdb::Weight(f.weight().value()))
+            .unwrap_or(fontdb::Weight(400));
+        let stretch = self
+            .current_font
+            .as_ref()
+            .map(|f| to_fontdb_stretch(f.stretch()))
+            .unwrap_or(fontdb::Stretch::Normal);
+        let style = self
+            .current_font
+            .as_ref()
+            .map(|f| to_fontdb_style(f.style()))
+            .unwrap_or(fontdb::Style::Normal);
+
+        let family = match self.current_font.as_ref().map(|f| f.family()) {
+            Some(f) if f.eq_ignore_ascii_case("serif") => fontdb::Family::Serif,
+            Some(f) if f.eq_ignore_ascii_case("monospace") => fontdb::Family::Monospace,
+            Some(f) if f.eq_ignore_ascii_case("cursive") => fontdb::Family::Cursive,
+            Some(f) if f.eq_ignore_ascii_case("fantasy") => fontdb::Family::Fantasy,
+            Some(f) if !f.eq_ignore_ascii_case("sans-serif") => fontdb::Family::Name(f),
+            _ => fontdb::Family::SansSerif,
+        };
+
+        let query = fontdb::Query {
+            families: &[family],
+            weight,
+            stretch,
+            style,
+        };
+
+        font_db.inner().query(&query)
+    }
+
     /// Returns the width of the given text in pixels.
     pub fn text_width(&self, text: &str) -> f32 {
         if text.is_empty() {
@@ -629,43 +798,42 @@ impl Canvas {
         static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
         let font_db = FONT_DB.get_or_init(FontDatabase::with_system_fonts);
 
-        let query = fontdb::Query {
-            families: &[fontdb::Family::SansSerif],
-            weight: fontdb::Weight(400),
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-
-        let Some(font_id) = font_db.inner().query(&query) else {
+        let Some(primary) = self.primary_font_id(font_db) else {
             // Fallback: estimate width
             return text.chars().count() as f32 * self.font_size * 0.6;
         };
 
         let mut total_width = 0.0f32;
-        font_db
-            .inner()
-            .with_face_data(font_id, |font_data_ref, face_index| {
-                let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
-                    return;
-                };
+        let mut measured_any = false;
 
-                let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
-                    return;
-                };
+        for (face_id, run) in text_runs(font_db, primary, text) {
+            font_db
+                .inner()
+                .with_face_data(face_id, |font_data_ref, face_index| {
+                    let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                        return;
+                    };
 
-                let mut buffer = rustybuzz::UnicodeBuffer::new();
-                buffer.push_str(text);
-                let output = rustybuzz::shape(&buzz_face, &[], buffer);
+                    let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index)
+                    else {
+                        return;
+                    };
 
-                let units_per_em = face.units_per_em() as f32;
-                let scale = self.font_size / units_per_em;
+                    let mut buffer = rustybuzz::UnicodeBuffer::new();
+                    buffer.push_str(&run);
+                    let output = rustybuzz::shape(&buzz_face, &[], buffer);
 
-                for pos in output.glyph_positions() {
-                    total_width += (pos.x_advance as f32) * scale;
-                }
-            });
+                    let units_per_em = face.units_per_em() as f32;
+                    let scale = self.font_size / units_per_em;
 
-        if total_width == 0.0 {
+                    for pos in output.glyph_positions() {
+                        total_width += (pos.x_advance as f32) * scale;
+                    }
+                    measured_any = true;
+                });
+        }
+
+        if !measured_any || total_width == 0.0 {
             // Fallback if measurement failed
             text.chars().count() as f32 * self.font_size * 0.6
         } else {
@@ -684,82 +852,78 @@ impl Canvas {
     }
 
     /// Fills text at the given position.
+    ///
+    /// Handles mixed-script text (e.g. English mixed with Korean/Japanese/
+    /// Chinese) by resolving each character to a font that actually has a
+    /// glyph for it, grouping consecutive same-font characters into runs -
+    /// see [`text_runs`]. A single font rarely covers every script, so this
+    /// is required for anything beyond the primary font's own coverage.
     pub fn fill_text(&mut self, text: &str, p: Point) {
         // Get or initialize the global font database
         static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
         let font_db = FONT_DB.get_or_init(FontDatabase::with_system_fonts);
 
-        // Find a suitable font
-        let query = fontdb::Query {
-            families: &[fontdb::Family::SansSerif],
-            weight: fontdb::Weight(400),
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-
-        let Some(font_id) = font_db.inner().query(&query) else {
+        let Some(primary) = self.primary_font_id(font_db) else {
             return;
         };
 
-        // Use with_face_data to access the font bytes directly
-        let mut rendered = false;
-        font_db
-            .inner()
-            .with_face_data(font_id, |font_data_ref, face_index| {
-                // Parse the font
-                let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
-                    return;
-                };
+        let runs = text_runs(font_db, primary, text);
+        let clip_mask = self.create_clip_mask();
 
-                // Create rustybuzz face
-                let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index) else {
-                    return;
-                };
+        let mut x_pos = p.x;
+        let y_pos = p.y;
 
-                // Shape the text
-                let mut buffer = rustybuzz::UnicodeBuffer::new();
-                buffer.push_str(text);
-                let output = rustybuzz::shape(&buzz_face, &[], buffer);
+        for (face_id, run) in runs {
+            font_db
+                .inner()
+                .with_face_data(face_id, |font_data_ref, face_index| {
+                    // Parse the font
+                    let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                        return;
+                    };
 
-                // Calculate scale factor
-                let units_per_em = face.units_per_em() as f32;
-                let scale = self.font_size / units_per_em;
+                    // Create rustybuzz face
+                    let Some(buzz_face) = rustybuzz::Face::from_slice(font_data_ref, face_index)
+                    else {
+                        return;
+                    };
 
-                // Render each glyph
-                let mut x_pos = p.x;
-                let y_pos = p.y;
+                    // Shape the run
+                    let mut buffer = rustybuzz::UnicodeBuffer::new();
+                    buffer.push_str(&run);
+                    let output = rustybuzz::shape(&buzz_face, &[], buffer);
 
-                let glyph_infos = output.glyph_infos();
-                let glyph_positions = output.glyph_positions();
+                    // Calculate scale factor
+                    let units_per_em = face.units_per_em() as f32;
+                    let scale = self.font_size / units_per_em;
 
-                for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
-                    let glyph_id = ttf_parser::GlyphId(info.glyph_id as u16);
+                    let glyph_infos = output.glyph_infos();
+                    let glyph_positions = output.glyph_positions();
 
-                    let glyph_x = x_pos + (pos.x_offset as f32) * scale;
-                    let glyph_y = y_pos + (pos.y_offset as f32) * scale;
+                    for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
+                        let glyph_id = ttf_parser::GlyphId(info.glyph_id as u16);
 
-                    // Render the glyph using outline
-                    let clip_mask = self.create_clip_mask();
-                    Self::render_glyph_static(
-                        &mut self.pixmap,
-                        &face,
-                        glyph_id,
-                        glyph_x,
-                        glyph_y,
-                        scale,
-                        self.fill_color,
-                        self.transform,
-                        clip_mask.as_ref(),
-                    );
+                        let glyph_x = x_pos + (pos.x_offset as f32) * scale;
+                        let glyph_y = y_pos + (pos.y_offset as f32) * scale;
 
-                    // Advance position
-                    x_pos += (pos.x_advance as f32) * scale;
-                }
-                rendered = true;
-            });
+                        // Render the glyph using outline
+                        Self::render_glyph_static(
+                            &mut self.pixmap,
+                            &face,
+                            glyph_id,
+                            glyph_x,
+                            glyph_y,
+                            scale,
+                            self.fill_color,
+                            self.transform,
+                            clip_mask.as_ref(),
+                        );
 
-        // If rendering failed inside the closure, nothing more to do
-        let _ = rendered;
+                        // Advance position
+                        x_pos += (pos.x_advance as f32) * scale;
+                    }
+                });
+        }
     }
 
     /// Renders a single glyph at the given position.
@@ -950,5 +1114,129 @@ impl<'a> std::ops::Deref for CanvasStateGuard<'a> {
 impl<'a> std::ops::DerefMut for CanvasStateGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.canvas
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+
+    fn test_font_db() -> &'static FontDatabase {
+        static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
+        FONT_DB.get_or_init(FontDatabase::with_system_fonts)
+    }
+
+    fn default_sans_serif(font_db: &FontDatabase) -> fontdb::ID {
+        let query = fontdb::Query {
+            families: &[fontdb::Family::SansSerif],
+            weight: fontdb::Weight(400),
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
+        };
+        font_db
+            .inner()
+            .query(&query)
+            .expect("system should have a sans-serif font")
+    }
+
+    // These assert actual glyph coverage on the *resolved* face, not just
+    // that something painted - a missing glyph still renders a visible
+    // `.notdef` tofu box, so "some pixels got painted" alone can't tell
+    // real script support from silent tofu.
+
+    #[test]
+    fn resolve_face_for_char_finds_real_korean_coverage() {
+        let font_db = test_font_db();
+        let primary = default_sans_serif(font_db);
+        let resolved = resolve_face_for_char(font_db, primary, '안');
+        assert!(
+            face_has_glyph(font_db, resolved, '안'),
+            "resolved face has no real glyph for '안' - would render as tofu"
+        );
+    }
+
+    #[test]
+    fn resolve_face_for_char_finds_real_japanese_coverage() {
+        let font_db = test_font_db();
+        let primary = default_sans_serif(font_db);
+        let resolved = resolve_face_for_char(font_db, primary, 'こ');
+        assert!(
+            face_has_glyph(font_db, resolved, 'こ'),
+            "resolved face has no real glyph for 'こ' - would render as tofu"
+        );
+    }
+
+    #[test]
+    fn resolve_face_for_char_finds_real_chinese_coverage() {
+        let font_db = test_font_db();
+        let primary = default_sans_serif(font_db);
+        let resolved = resolve_face_for_char(font_db, primary, '你');
+        assert!(
+            face_has_glyph(font_db, resolved, '你'),
+            "resolved face has no real glyph for '你' - would render as tofu"
+        );
+    }
+
+    #[test]
+    fn text_width_is_positive_for_non_latin_scripts() {
+        let mut canvas = Canvas::new(400, 100).unwrap();
+        canvas.font_size(24.0);
+
+        for text in [
+            "Hello",
+            "안녕하세요",
+            "こんにちは",
+            "你好",
+            "Hello 안녕 こんにちは",
+        ] {
+            let width = canvas.text_width(text);
+            assert!(
+                width > 0.0,
+                "expected positive width for {text:?}, got {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_script_text_measures_wider_than_its_latin_prefix() {
+        let mut canvas = Canvas::new(500, 100).unwrap();
+        canvas.font_size(24.0);
+
+        let latin_only_width = canvas.text_width("Hello ");
+        let mixed_width = canvas.text_width("Hello 안녕");
+
+        assert!(
+            mixed_width > latin_only_width,
+            "mixed-script text should measure wider than its Latin prefix alone"
+        );
+    }
+
+    #[test]
+    fn respects_explicitly_selected_font_family() {
+        // `Canvas::font` was previously stored but never actually consulted
+        // when querying/shaping - this would have queried plain
+        // `fontdb::Family::SansSerif` regardless of what was set here.
+        let mut canvas = Canvas::new(400, 100).unwrap();
+        canvas.font(Font::monospace());
+        canvas.font_size(24.0);
+
+        let font_db = test_font_db();
+        let primary = canvas
+            .primary_font_id(font_db)
+            .expect("system should have a monospace font");
+        let monospace_query_id = font_db
+            .inner()
+            .query(&fontdb::Query {
+                families: &[fontdb::Family::Monospace],
+                weight: fontdb::Weight(400),
+                stretch: fontdb::Stretch::Normal,
+                style: fontdb::Style::Normal,
+            })
+            .expect("system should have a monospace font");
+
+        assert_eq!(
+            primary, monospace_query_id,
+            "selecting a monospace font should actually query for one"
+        );
     }
 }
