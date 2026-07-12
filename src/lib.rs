@@ -53,7 +53,7 @@ pub mod prelude {
         align::*,
         button::{button, BasicButton},
         checkbox::{checkbox, radio_button, Checkbox, RadioButton, RadioGroup},
-        code_editor::{code_editor, CodeEditor},
+        code_editor::{code_editor, CodeEditor, Diagnostic, DiagnosticSeverity},
         composite::{Composite, CompositeBase},
         context::{BasicContext, Context},
         design_canvas::{design_canvas, DesignCanvas},
@@ -88,7 +88,7 @@ pub mod prelude {
         tree::{tree_node, tree_view, TreeNode, TreeView},
         Element, ElementPtr, ViewLimits, ViewStretch, WeakElementPtr,
     };
-    pub use crate::host::{App, Window};
+    pub use crate::host::{App, CloseBehavior, Window};
     pub use crate::support::{
         canvas::Canvas,
         color::{colors, Color},

@@ -24,8 +24,11 @@ use crate::support::theme::get_theme;
 use crate::view::{CursorTracking, KeyCode, KeyInfo, MouseButton, MouseButtonKind, TextInfo};
 
 /// A (line, column) position in the buffer. `column` is a char index within
-/// `line`'s `String`, not a byte offset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// `line`'s `String`, not a byte offset. `PartialOrd`/`Ord` compare fields in
+/// declaration order (line first), giving buffer order for free -- used by
+/// `find_next`/`find_prev` to locate the nearest match relative to the
+/// cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 struct CursorPos {
     line: usize,
     column: usize,
@@ -49,6 +52,29 @@ struct Highlight {
     color: Color,
 }
 
+/// Severity of a [`Diagnostic`], matching the LSP's three-level scheme
+/// (LSP's `Hint` folds into `Info` here -- one more color wouldn't add
+/// anything a caller couldn't already convey via `message`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+/// A single diagnostic (e.g. from `mkide-lsp`) attached to one line.
+/// Whole-line rather than column-range, matching this editor's existing
+/// preference for simplicity in its first version (see the module doc
+/// comment) -- enough to show "something's wrong here," which is what the
+/// gutter marker and line tint are for; the message itself carries the
+/// specifics.
+#[derive(Debug, Clone)]
+pub struct Diagnostic {
+    pub line: usize,
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+}
+
 pub type TextChangeCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// A multi-line code editor with line numbers and syntax highlighting.
@@ -63,12 +89,20 @@ pub struct CodeEditor {
     highlights: RwLock<Vec<Highlight>>,
     parser: RwLock<tree_sitter::Parser>,
     query: Option<tree_sitter::Query>,
+    diagnostics: RwLock<Vec<Diagnostic>>,
+    read_only: RwLock<bool>,
+    find_query: RwLock<String>,
+    find_matches: RwLock<Vec<CursorPos>>,
 
     background_color: Color,
     gutter_color: Color,
     gutter_text_color: Color,
     text_color: Color,
     highlight_select_color: Color,
+    find_match_color: Color,
+    error_color: Color,
+    warning_color: Color,
+    info_color: Color,
     caret_color: Color,
     font_size: f32,
     line_height: f32,
@@ -106,11 +140,19 @@ impl CodeEditor {
             highlights: RwLock::new(Vec::new()),
             parser: RwLock::new(parser),
             query,
+            diagnostics: RwLock::new(Vec::new()),
+            read_only: RwLock::new(false),
+            find_query: RwLock::new(String::new()),
+            find_matches: RwLock::new(Vec::new()),
             background_color: theme.input_box_color,
             gutter_color: theme.input_box_color.level(0.9),
             gutter_text_color: theme.text_box_idle_color,
             text_color: theme.text_box_font_color,
             highlight_select_color: theme.text_box_hilite_color,
+            find_match_color: Color::from_rgb_u32(0xffd54a).with_alpha(0.45),
+            error_color: Color::from_rgb_u32(0xe5484d),
+            warning_color: Color::from_rgb_u32(0xf5a623),
+            info_color: Color::from_rgb_u32(0x4a9fe5),
             caret_color: theme.text_box_caret_color,
             font_size: theme.text_box_font_size,
             line_height: theme.text_box_font_size * 1.4,
@@ -151,6 +193,122 @@ impl CodeEditor {
         self
     }
 
+    /// Makes the editor read-only from construction (builder form). Cursor
+    /// movement, selection, and copying still work; typing, paste, and
+    /// undo/redo do not. Needed for e.g. MKIDE's build-output/log panel,
+    /// which reuses this same editor purely as a scrollable, syntax-free
+    /// text view that the user shouldn't be able to accidentally edit.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        *self.read_only.get_mut().unwrap() = read_only;
+        self
+    }
+
+    /// Toggles read-only at runtime (e.g. locking the buffer while a build
+    /// is in progress).
+    pub fn set_read_only(&self, read_only: bool) {
+        *self.read_only.write().unwrap() = read_only;
+    }
+
+    /// Returns whether the editor is currently read-only.
+    pub fn is_read_only(&self) -> bool {
+        *self.read_only.read().unwrap()
+    }
+
+    /// Replaces the set of per-line diagnostics shown as gutter markers and
+    /// a faint full-line tint (e.g. from `mkide-lsp`'s
+    /// `LspClient::diagnostics_for`). Lines outside the current buffer are
+    /// silently ignored rather than panicking, since diagnostics can arrive
+    /// slightly out of sync with the buffer (the language server saw an
+    /// older or newer version of the file).
+    pub fn set_diagnostics(&self, diagnostics: Vec<Diagnostic>) {
+        *self.diagnostics.write().unwrap() = diagnostics;
+    }
+
+    /// Clears all diagnostic markers.
+    pub fn clear_diagnostics(&self) {
+        self.diagnostics.write().unwrap().clear();
+    }
+
+    /// Sets the text to highlight all occurrences of, and moves the cursor
+    /// to the first match at or after the current cursor position (wrapping
+    /// around to the start of the buffer if none is found after it). Pass
+    /// an empty string to clear highlighting. Returns whether any match was
+    /// found (always `false` for an empty query).
+    pub fn find(&self, query: &str) -> bool {
+        *self.find_query.write().unwrap() = query.to_string();
+        self.recompute_find_matches();
+        if query.is_empty() {
+            return false;
+        }
+        let cursor = *self.cursor.read().unwrap();
+        self.find_next_from(cursor, true)
+    }
+
+    /// Moves to the next match after the current cursor position, wrapping
+    /// around. No-op (returns `false`) if `find` hasn't been called with a
+    /// non-empty query, or there are no matches.
+    pub fn find_next(&self) -> bool {
+        let cursor = *self.cursor.read().unwrap();
+        self.find_next_from(cursor, true)
+    }
+
+    /// Moves to the previous match before the current cursor position,
+    /// wrapping around.
+    pub fn find_prev(&self) -> bool {
+        let cursor = *self.cursor.read().unwrap();
+        self.find_next_from(cursor, false)
+    }
+
+    fn find_next_from(&self, from: CursorPos, forward: bool) -> bool {
+        let matches = self.find_matches.read().unwrap();
+        if matches.is_empty() {
+            return false;
+        }
+        let next = if forward {
+            matches
+                .iter()
+                .find(|m| **m > from)
+                .or_else(|| matches.first())
+        } else {
+            matches
+                .iter()
+                .rev()
+                .find(|m| **m < from)
+                .or_else(|| matches.last())
+        };
+        let Some(&pos) = next else {
+            return false;
+        };
+        drop(matches);
+        *self.cursor.write().unwrap() = pos;
+        *self.selection_anchor.write().unwrap() = None;
+        true
+    }
+
+    fn recompute_find_matches(&self) {
+        let query = self.find_query.read().unwrap().clone();
+        let mut matches = Vec::new();
+        if !query.is_empty() {
+            let lines = self.lines.read().unwrap();
+            for (line_index, line) in lines.iter().enumerate() {
+                let mut start = 0;
+                while let Some(byte_offset) = line[start..].find(&query) {
+                    let byte_pos = start + byte_offset;
+                    let column = line[..byte_pos].chars().count();
+                    matches.push(CursorPos {
+                        line: line_index,
+                        column,
+                    });
+                    start = byte_pos + query.len().max(1);
+                    if start >= line.len() {
+                        break;
+                    }
+                }
+            }
+        }
+        *self.find_matches.write().unwrap() = matches;
+    }
+
     /// Returns the current buffer text (lines joined with `\n`).
     pub fn get_text(&self) -> String {
         self.lines.read().unwrap().join("\n")
@@ -182,6 +340,9 @@ impl CodeEditor {
     }
 
     fn undo(&self) {
+        if *self.read_only.read().unwrap() {
+            return;
+        }
         let Some(snapshot) = self.undo_stack.write().unwrap().pop() else {
             return;
         };
@@ -194,6 +355,9 @@ impl CodeEditor {
     }
 
     fn redo(&self) {
+        if *self.read_only.read().unwrap() {
+            return;
+        }
         let Some(snapshot) = self.redo_stack.write().unwrap().pop() else {
             return;
         };
@@ -223,6 +387,11 @@ impl CodeEditor {
     /// correct approach for a first version; fine at editor-buffer sizes,
     /// worth revisiting with `Tree::edit` if profiling ever shows it matters.
     fn reparse(&self) {
+        // Called after every edit, so this is also the one place that keeps
+        // find-match positions in sync with the buffer, regardless of
+        // whether tree-sitter highlighting itself is available below.
+        self.recompute_find_matches();
+
         let Some(query) = &self.query else {
             return;
         };
@@ -254,6 +423,9 @@ impl CodeEditor {
     }
 
     fn insert_text(&self, s: &str) {
+        if *self.read_only.read().unwrap() {
+            return;
+        }
         self.push_undo_snapshot();
         let mut lines = self.lines.write().unwrap();
         let mut cursor = self.cursor.write().unwrap();
@@ -287,6 +459,9 @@ impl CodeEditor {
     }
 
     fn delete_backward(&self) {
+        if *self.read_only.read().unwrap() {
+            return;
+        }
         let mut lines = self.lines.write().unwrap();
         let mut cursor = self.cursor.write().unwrap();
         let mut anchor = self.selection_anchor.write().unwrap();
@@ -318,6 +493,9 @@ impl CodeEditor {
     }
 
     fn delete_forward(&self) {
+        if *self.read_only.read().unwrap() {
+            return;
+        }
         let mut lines = self.lines.write().unwrap();
         let mut cursor = self.cursor.write().unwrap();
         let mut anchor = self.selection_anchor.write().unwrap();
@@ -436,6 +614,31 @@ impl CodeEditor {
         }
     }
 
+    /// Highest-severity diagnostic on `line`, if any (a line with both an
+    /// error and a warning shows the error marker, since that's the more
+    /// actionable of the two).
+    fn diagnostic_severity_for_line(&self, line: usize) -> Option<DiagnosticSeverity> {
+        self.diagnostics
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|d| d.line == line)
+            .map(|d| d.severity)
+            .max_by_key(|s| match s {
+                DiagnosticSeverity::Error => 2,
+                DiagnosticSeverity::Warning => 1,
+                DiagnosticSeverity::Info => 0,
+            })
+    }
+
+    fn severity_color(&self, severity: DiagnosticSeverity) -> Color {
+        match severity {
+            DiagnosticSeverity::Error => self.error_color,
+            DiagnosticSeverity::Warning => self.warning_color,
+            DiagnosticSeverity::Info => self.info_color,
+        }
+    }
+
     fn draw_gutter(&self, ctx: &Context, first_visible_line: usize, visible_lines: usize) {
         let mut canvas = ctx.canvas.borrow_mut();
         let gutter_rect = Rect::new(
@@ -450,7 +653,6 @@ impl CodeEditor {
         let theme = get_theme();
         canvas.font(theme.text_box_font);
         canvas.font_size(self.font_size);
-        canvas.fill_style(self.gutter_text_color);
 
         let lines = self.lines.read().unwrap();
         for row in 0..visible_lines {
@@ -458,10 +660,21 @@ impl CodeEditor {
             if line_index >= lines.len() {
                 break;
             }
-            let label = (line_index + 1).to_string();
             let y = ctx.bounds.top - self.scroll_offset.read().unwrap().fract() * 0.0
                 + (row as f32 + 1.0) * self.line_height
                 - self.line_height * 0.3;
+
+            if let Some(severity) = self.diagnostic_severity_for_line(line_index) {
+                canvas.fill_style(self.severity_color(severity));
+                let dot_y = y - self.font_size * 0.35;
+                canvas.fill_round_rect(
+                    Rect::new(ctx.bounds.left + 4.0, dot_y - 3.0, ctx.bounds.left + 10.0, dot_y + 3.0),
+                    3.0,
+                );
+            }
+
+            let label = (line_index + 1).to_string();
+            canvas.fill_style(self.gutter_text_color);
             let x = ctx.bounds.left + self.gutter_width - 8.0 - canvas.text_width(&label);
             canvas.fill_text(&label, Point::new(x, y));
         }
@@ -482,6 +695,8 @@ impl CodeEditor {
         let cursor = *self.cursor.read().unwrap();
         let anchor = *self.selection_anchor.read().unwrap();
         let highlights = self.highlights.read().unwrap();
+        let find_matches = self.find_matches.read().unwrap();
+        let query_len = self.find_query.read().unwrap().chars().count();
         let text_left = ctx.bounds.left + self.gutter_width + 6.0;
 
         for row in 0..visible_lines {
@@ -492,6 +707,30 @@ impl CodeEditor {
             let line = &lines[line_index];
             let y_top = ctx.bounds.top + row as f32 * self.line_height;
             let y_baseline = y_top + self.line_height - self.font_size * 0.3;
+
+            // Faint full-line tint for a diagnostic on this line, drawn
+            // first so selection/find highlights and text stay legible on
+            // top of it.
+            if let Some(severity) = self.diagnostic_severity_for_line(line_index) {
+                canvas.fill_style(self.severity_color(severity).with_alpha(0.12));
+                canvas.fill_rect(Rect::new(
+                    ctx.bounds.left + self.gutter_width,
+                    y_top,
+                    ctx.bounds.right,
+                    y_top + self.line_height,
+                ));
+            }
+
+            // Highlight every find match on this line.
+            if query_len > 0 {
+                for m in find_matches.iter().filter(|m| m.line == line_index) {
+                    let x1 = text_left + canvas.text_width_to_position(line, m.column);
+                    let x2 = text_left
+                        + canvas.text_width_to_position(line, (m.column + query_len).min(line.chars().count()));
+                    canvas.fill_style(self.find_match_color);
+                    canvas.fill_rect(Rect::new(x1, y_top, x2.max(x1 + 2.0), y_top + self.line_height));
+                }
+            }
 
             // Selection background for this line, if any.
             if let Some(sel) = anchor {
@@ -578,7 +817,14 @@ impl Default for CodeEditor {
 
 impl Element for CodeEditor {
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::fixed(self.width, self.height)
+        // `min_size`, not `fixed`: `.width()`/`.height()` set a starting
+        // size, not a hard cap. `ViewLimits::fixed` pins `max` to the same
+        // value as `min`, and since `VTile`/`HTile` aggregate `max` across
+        // children via `min()`, a single fixed-size editor in a layout caps
+        // the *entire* surrounding column/row at that size forever, however
+        // wide the window grows -- confirmed as the cause of MKIDE's editor
+        // area never resizing past the ~700pt it was constructed with.
+        ViewLimits::min_size(self.width, self.height)
     }
 
     fn stretch(&self) -> ViewStretch {

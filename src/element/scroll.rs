@@ -348,7 +348,8 @@ impl Default for ScrollView {
 
 impl Element for ScrollView {
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::fixed(self.width, self.height)
+        // `min_size`, not `fixed` -- see `CodeEditor::limits` for why.
+        ViewLimits::min_size(self.width, self.height)
     }
 
     fn stretch(&self) -> ViewStretch {

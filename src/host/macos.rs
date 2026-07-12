@@ -5,7 +5,7 @@
 
 #![cfg(target_os = "macos")]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use block2::RcBlock;
 use core::ptr::NonNull;
@@ -14,12 +14,16 @@ use core_graphics::context::CGContext;
 use core_graphics::data_provider::CGDataProvider;
 use core_graphics::image::CGImage;
 use objc2::rc::Retained;
+use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSCursor, NSEvent,
-    NSGraphicsContext, NSMenu, NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSCursor, NSEvent, NSGraphicsContext, NSMenu,
+    NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
+
+use super::{CloseBehavior, Window};
 
 use crate::element::context::Context;
 use crate::element::ElementPtr;
@@ -211,6 +215,14 @@ pub fn set_clipboard(_text: &str) {
 pub struct MacOSApp {
     app: Retained<NSApplication>,
     mtm: MainThreadMarker,
+    // `NSApplication.delegate` is an unretained (`weak`-equivalent)
+    // reference by convention, not a strong one, so nothing but us keeps
+    // this instance alive once `setDelegate:` returns -- without holding it
+    // here, it would be deallocated immediately and every subsequent
+    // `applicationShouldTerminateAfterLastWindowClosed:`/
+    // `applicationShouldHandleReopen:hasVisibleWindows:` call would land on
+    // a dangling reference.
+    delegate: RefCell<Option<Retained<MKAppDelegate>>>,
 }
 
 impl MacOSApp {
@@ -221,10 +233,27 @@ impl MacOSApp {
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-        let macos_app = Self { app, mtm };
+        let macos_app = Self {
+            app,
+            mtm,
+            delegate: RefCell::new(None),
+        };
         macos_app.setup_menu();
 
         Some(macos_app)
+    }
+
+    /// See [`super::CloseBehavior`] and [`super::App::set_close_behavior`].
+    pub fn set_close_behavior(&self, behavior: CloseBehavior) {
+        let (quit_on_last_window_closed, rebuild) = match behavior {
+            CloseBehavior::QuitApp => (true, None),
+            CloseBehavior::KeepRunning(rebuild) => (false, Some(rebuild)),
+        };
+
+        let delegate = MKAppDelegate::new(self.mtm, quit_on_last_window_closed, rebuild);
+        self.app
+            .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        *self.delegate.borrow_mut() = Some(delegate);
     }
 
     /// Schedules `callback` on the main run loop: repeatedly, every
@@ -579,6 +608,73 @@ impl MacOSApp {
     /// Stops the application.
     pub fn stop(&self) {
         self.app.stop(None);
+    }
+}
+
+/// Ivars for [`MKAppDelegate`]. `RefCell`s rather than plain fields since
+/// `declare_class!` methods only ever get `&self` (Objective-C has no
+/// concept of Rust's exclusive borrows), matching every other stateful
+/// `declare_class!` type in this file (e.g. `MKViewIvars`).
+struct MKAppDelegateIvars {
+    quit_on_last_window_closed: Cell<bool>,
+    rebuild: RefCell<Option<Box<dyn Fn() -> Window>>>,
+    // Holds whatever `rebuild` last produced, so it stays alive for as long
+    // as the app keeps running instead of being dropped (and its native
+    // window deallocated/closed) the instant `applicationShouldHandleReopen:
+    // hasVisibleWindows:` returns.
+    current_window: RefCell<Option<Window>>,
+}
+
+declare_class!(
+    struct MKAppDelegate;
+
+    unsafe impl ClassType for MKAppDelegate {
+        type Super = NSObject;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "MKAppDelegate";
+    }
+
+    impl DeclaredClass for MKAppDelegate {
+        type Ivars = MKAppDelegateIvars;
+    }
+
+    unsafe impl NSObjectProtocol for MKAppDelegate {}
+
+    unsafe impl NSApplicationDelegate for MKAppDelegate {
+        #[method(applicationShouldTerminateAfterLastWindowClosed:)]
+        fn should_terminate_after_last_window_closed(&self, _sender: &NSApplication) -> bool {
+            self.ivars().quit_on_last_window_closed.get()
+        }
+
+        #[method(applicationShouldHandleReopen:hasVisibleWindows:)]
+        fn should_handle_reopen(&self, _sender: &NSApplication, has_visible_windows: bool) -> bool {
+            if !has_visible_windows {
+                let rebuilt = self.ivars().rebuild.borrow().as_ref().map(|rebuild| {
+                    let mut window = rebuild();
+                    window.show();
+                    window
+                });
+                if let Some(window) = rebuilt {
+                    *self.ivars().current_window.borrow_mut() = Some(window);
+                }
+            }
+            true
+        }
+    }
+);
+
+impl MKAppDelegate {
+    fn new(
+        mtm: MainThreadMarker,
+        quit_on_last_window_closed: bool,
+        rebuild: Option<Box<dyn Fn() -> Window>>,
+    ) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(MKAppDelegateIvars {
+            quit_on_last_window_closed: Cell::new(quit_on_last_window_closed),
+            rebuild: RefCell::new(rebuild),
+            current_window: RefCell::new(None),
+        });
+        unsafe { msg_send_id![super(this), init] }
     }
 }
 
@@ -1109,6 +1205,23 @@ impl MacOSWindow {
 
         // Create our custom view
         let mk_view = MKView::new(mtm, size);
+        // Without this, dragging the window's edge resizes the *window*
+        // but leaves this content view pinned at its original construction
+        // size in the bottom-left corner (NSView's default
+        // autoresizingMask is `NotSizable`) -- so widgets never actually
+        // re-laid-out on resize, since `drawRect:`'s `self.frame()` read
+        // (which is otherwise correctly live -- see `MKView::draw_rect`)
+        // never changed either. `WidthSizable | HeightSizable` makes
+        // AppKit stretch this view's frame to track the window's content
+        // rect on every resize, which is what actually makes the already-
+        // correct per-frame `self.frame()` read (and this session's earlier
+        // `VTile`/`HTile`/`ScrollView` resize-cache fixes) take effect.
+        unsafe {
+            mk_view.setAutoresizingMask(
+                NSAutoresizingMaskOptions::NSViewWidthSizable
+                    | NSAutoresizingMaskOptions::NSViewHeightSizable,
+            );
+        }
         window.setContentView(Some(&mk_view));
 
         Self {

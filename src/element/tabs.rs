@@ -49,6 +49,17 @@ impl Tab {
         self
     }
 
+    /// Sets the tab content from an already-shared `ElementPtr`, without
+    /// wrapping it in a second `Arc` via `share()`. Needed when the host app
+    /// keeps its own handle to the same widget (e.g. an `Arc<CodeEditor>` it
+    /// calls `set_text`/`get_text` on from callbacks) -- the same situation
+    /// `VTile::from_vec`/`HTile::from_vec` exist for, since there's no
+    /// blanket `Element` impl for `ElementPtr` itself.
+    pub fn content_ptr(mut self, content: ElementPtr) -> Self {
+        self.content = Some(content);
+        self
+    }
+
     /// Shows a close ("x") button on this tab; clicking it fires
     /// `TabBar::on_close` instead of activating the tab. Needed for an
     /// editor-style tab bar (one tab per open file) where tabs are closed

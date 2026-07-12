@@ -323,11 +323,20 @@ impl Default for TreeView {
 
 impl Element for TreeView {
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::fixed(self.width, self.height)
+        // `min_size`, not `fixed` -- see `CodeEditor::limits` for why: a
+        // sidebar tree should stay at least this size, not be capped at
+        // exactly this size forever regardless of how much room its
+        // container actually has.
+        ViewLimits::min_size(self.width, self.height)
     }
 
     fn stretch(&self) -> ViewStretch {
-        ViewStretch::new(1.0, 1.0)
+        // No horizontal stretch: a sidebar tree should stay close to its
+        // constructed width and let a sibling with an actual claim on
+        // extra space (e.g. an editor) take it, not split it 50/50 just
+        // because both have a non-zero `max`. Vertical stretch stays on so
+        // it still fills the height of whatever column/row it's in.
+        ViewStretch::new(0.0, 1.0)
     }
 
     fn draw(&self, ctx: &Context) {

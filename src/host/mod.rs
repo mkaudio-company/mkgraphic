@@ -407,6 +407,24 @@ impl Window {
     }
 }
 
+/// What happens when the app's window is closed (the red button, not
+/// `Window::hide`/`App::stop`).
+///
+/// Neither behavior was previously available at all: closing the window
+/// left the app running with no window and no way to get one back (the
+/// default AppKit behavior for an app with no delegate), which looked
+/// exactly like a hung/broken app from the Dock -- clicking its icon did
+/// nothing since there was nothing telling AppKit how to respond.
+pub enum CloseBehavior {
+    /// Quit the whole app, matching a typical single-window utility.
+    QuitApp,
+    /// Keep the app running with no visible windows. When the OS asks the
+    /// app to "reopen" with none visible (e.g. the user clicks its Dock
+    /// icon), `rebuild` is called to construct a fresh window, which the
+    /// app then shows and keeps alive for as long as it keeps running.
+    KeepRunning(Box<dyn Fn() -> Window>),
+}
+
 /// The application.
 pub struct App {
     running: bool,
@@ -503,6 +521,16 @@ impl App {
     #[cfg(target_os = "macos")]
     pub fn main_thread_marker(&self) -> Option<MainThreadMarker> {
         MainThreadMarker::new()
+    }
+
+    /// Configures what happens when the app's window is closed (see
+    /// [`CloseBehavior`]). Call before [`Self::run`]. macOS only for now --
+    /// same reasoning as [`Self::schedule_timer`]'s platform note.
+    #[cfg(target_os = "macos")]
+    pub fn set_close_behavior(&self, behavior: CloseBehavior) {
+        if let Some(ref app) = self.macos_app {
+            app.set_close_behavior(behavior);
+        }
     }
 
     /// Schedules `callback` to run repeatedly on the main thread every

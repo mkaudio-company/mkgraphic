@@ -280,11 +280,20 @@ impl DesignCanvas {
 
 impl Element for DesignCanvas {
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::fixed(self.width, self.height)
+        // `min_size`, not `fixed` -- see `CodeEditor::limits` for why. A
+        // design surface should fill whatever space its container gives it
+        // (e.g. the WYSIWYG designer's main area), not be capped at
+        // whatever size it happened to be constructed with.
+        ViewLimits::min_size(self.width, self.height)
     }
 
     fn stretch(&self) -> ViewStretch {
-        ViewStretch::new(0.0, 0.0)
+        // Paired with the `min_size` change above: a `VTile`/`HTile` only
+        // hands out its *extra* space (beyond children's combined minimums)
+        // to children in proportion to `stretch`, so `min_size` alone
+        // wouldn't have actually grown this in a tile layout without also
+        // claiming a share of that extra space here.
+        ViewStretch::new(1.0, 1.0)
     }
 
     fn draw(&self, ctx: &Context) {
