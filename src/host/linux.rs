@@ -26,6 +26,7 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
+use super::CloseBehavior;
 use crate::element::context::Context;
 use crate::element::ElementPtr;
 use crate::support::canvas::Canvas;
@@ -366,6 +367,7 @@ struct LinuxAppInner {
     screen_num: usize,
     windows: RefCell<HashMap<Window, Rc<WindowState>>>,
     timers: RefCell<Vec<TimerEntry>>,
+    quit_on_last_window_closed: Cell<bool>,
 }
 
 thread_local! {
@@ -387,6 +389,7 @@ impl LinuxApp {
             screen_num,
             windows: RefCell::new(HashMap::new()),
             timers: RefCell::new(Vec::new()),
+            quit_on_last_window_closed: Cell::new(true),
         });
         CURRENT_APP.with(|cell| *cell.borrow_mut() = Some(inner.clone()));
         Some(Self {
@@ -457,6 +460,22 @@ impl LinuxApp {
     /// Stops the application.
     pub fn stop(&mut self) {
         self.running = false;
+    }
+
+    /// See [`super::CloseBehavior`] and [`super::App::set_close_behavior`].
+    ///
+    /// X11 has no equivalent of macOS's Dock-icon reopen gesture, so only
+    /// the "don't quit when the last window closes" half of
+    /// `CloseBehavior::KeepRunning` is honored here; the `rebuild` closure
+    /// is intentionally never called.
+    pub fn set_close_behavior(&self, behavior: CloseBehavior) {
+        let quit_on_last_window_closed = match behavior {
+            CloseBehavior::QuitApp => true,
+            CloseBehavior::KeepRunning(_) => false,
+        };
+        self.inner
+            .quit_on_last_window_closed
+            .set(quit_on_last_window_closed);
     }
 
     /// Time until the earliest live timer should fire, or `None` if there
@@ -653,7 +672,9 @@ impl LinuxApp {
             }
             Event::DestroyNotify(e) => {
                 self.inner.windows.borrow_mut().remove(&e.window);
-                if self.inner.windows.borrow().is_empty() {
+                if self.inner.windows.borrow().is_empty()
+                    && self.inner.quit_on_last_window_closed.get()
+                {
                     self.running = false;
                 }
             }

@@ -5,7 +5,7 @@
 
 #![cfg(target_os = "windows")]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use windows::core::{w, PCWSTR};
@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 
+use super::CloseBehavior;
 use crate::element::context::Context;
 use crate::element::ElementPtr;
 use crate::support::canvas::Canvas;
@@ -258,7 +259,18 @@ unsafe extern "system" fn window_proc(
                 drop(Box::from_raw(ptr));
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
-            PostQuitMessage(0);
+            // Only quit the message loop if this was the last live window
+            // and nobody asked to keep running past that (see
+            // `CloseBehavior`/`App::set_close_behavior`) - otherwise leave
+            // the loop blocking in `GetMessageW`, alive with no window.
+            let remaining = WINDOW_COUNT.with(|count| {
+                let n = count.get().saturating_sub(1);
+                count.set(n);
+                n
+            });
+            if remaining == 0 && QUIT_ON_LAST_WINDOW_CLOSED.with(|q| q.get()) {
+                PostQuitMessage(0);
+            }
             LRESULT(0)
         }
         WM_PAINT => {
@@ -552,6 +564,14 @@ struct TimerEntry {
 
 thread_local! {
     static TIMER_CALLBACKS: RefCell<HashMap<usize, TimerEntry>> = RefCell::new(HashMap::new());
+    // Tracks live windows and what should happen when the last one closes
+    // (see `CloseBehavior`/`App::set_close_behavior`). `window_proc`'s
+    // `WM_DESTROY` arm is a plain `extern "system" fn` with no `&WindowsApp`
+    // reachable from it, so this state has to live somewhere
+    // process/thread-global rather than on a struct - same reasoning as
+    // `TIMER_CALLBACKS` above.
+    static WINDOW_COUNT: Cell<u32> = const { Cell::new(0) };
+    static QUIT_ON_LAST_WINDOW_CLOSED: Cell<bool> = const { Cell::new(true) };
 }
 
 /// `TIMERPROC` for every app-level timer (`hwnd = None` in `SetTimer`, so
@@ -664,6 +684,20 @@ impl WindowsApp {
             PostQuitMessage(0);
         }
     }
+
+    /// See [`super::CloseBehavior`] and [`super::App::set_close_behavior`].
+    ///
+    /// Windows has no equivalent of macOS's Dock-icon reopen gesture, so
+    /// only the "don't quit when the last window closes" half of
+    /// `CloseBehavior::KeepRunning` is honored here; the `rebuild` closure
+    /// is intentionally never called.
+    pub fn set_close_behavior(&self, behavior: CloseBehavior) {
+        let quit_on_last_window_closed = match behavior {
+            CloseBehavior::QuitApp => true,
+            CloseBehavior::KeepRunning(_) => false,
+        };
+        QUIT_ON_LAST_WINDOW_CLOSED.with(|q| q.set(quit_on_last_window_closed));
+    }
 }
 
 /// Windows window wrapper.
@@ -726,6 +760,7 @@ impl WindowsWindow {
                 size: RefCell::new(size),
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+            WINDOW_COUNT.with(|count| count.set(count.get() + 1));
 
             Some(Self {
                 hwnd,

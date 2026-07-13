@@ -538,11 +538,26 @@ impl App {
     }
 
     /// Configures what happens when the app's window is closed (see
-    /// [`CloseBehavior`]). Call before [`Self::run`]. macOS only for now --
-    /// same reasoning as [`Self::schedule_timer`]'s platform note.
-    #[cfg(target_os = "macos")]
+    /// [`CloseBehavior`]). Call before [`Self::run`].
+    ///
+    /// Covers macOS, Windows, and Linux/X11, but only macOS can honor the
+    /// `KeepRunning` closure's rebuild -- it's wired to
+    /// `applicationShouldHandleReopen:hasVisibleWindows:`, triggered by
+    /// clicking the Dock icon. Windows and Linux have no equivalent native
+    /// gesture, so on those platforms `KeepRunning` only suppresses quitting
+    /// when the last window closes; the rebuild closure is never invoked.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     pub fn set_close_behavior(&self, behavior: CloseBehavior) {
+        #[cfg(target_os = "macos")]
         if let Some(ref app) = self.macos_app {
+            app.set_close_behavior(behavior);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(ref app) = self.windows_app {
+            app.set_close_behavior(behavior);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ref app) = self.linux_app {
             app.set_close_behavior(behavior);
         }
     }

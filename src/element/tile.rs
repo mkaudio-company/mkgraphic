@@ -78,7 +78,6 @@ impl VTile {
             }
         }
         tiles[count] = y;
-        eprintln!("[verify] total_y={y} (should equal height={height})");
 
         tiles
     }
