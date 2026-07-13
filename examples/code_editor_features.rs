@@ -7,13 +7,10 @@ fn main() {
     let mut app = App::new();
     let mut window = Window::new("Code Editor Features", Extent::new(700.0, 500.0));
 
-    let editor = code_editor()
-        .width(700.0)
-        .height(500.0)
-        .text(
-            "fn main() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}\n"
-                .to_string(),
-        );
+    let editor = code_editor().width(700.0).height(500.0).text(
+        "fn main() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}\n"
+            .to_string(),
+    );
 
     editor.set_diagnostics(vec![
         Diagnostic {

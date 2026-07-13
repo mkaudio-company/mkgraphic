@@ -333,10 +333,10 @@ pub fn margin_vertical<S: Element>(value: f32, subject: S) -> MarginElement<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::ViewStretch;
-    use crate::support::canvas::Canvas;
     use crate::element::tile::VTile;
-    use crate::element::{share, composite::CompositeBase};
+    use crate::element::ViewStretch;
+    use crate::element::{composite::CompositeBase, share};
+    use crate::support::canvas::Canvas;
 
     struct NonStretchy;
     impl Element for NonStretchy {
@@ -408,6 +408,10 @@ mod tests {
         // (400 total - 34 margin-wrapped - 100 stretchy min - wait: total
         // min = 34 + 100 = 134, extra = 400 - 134 = 266), not half of it
         // discarded by the margin-wrapped sibling clamping its share away.
-        assert_eq!(stretchy_bounds.height(), 400.0 - 34.0, "stretchy sibling should absorb all the extra space, none of it lost");
+        assert_eq!(
+            stretchy_bounds.height(),
+            400.0 - 34.0,
+            "stretchy sibling should absorb all the extra space, none of it lost"
+        );
     }
 }

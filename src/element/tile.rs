@@ -780,12 +780,20 @@ mod tests {
         let ctx = Context::new(&view, &canvas, bounds);
 
         let before = vtile.bounds_of(&ctx, 1);
-        assert_eq!(before.top, 90.0, "second child should start right after the first's 90pt height");
+        assert_eq!(
+            before.top, 90.0,
+            "second child should start right after the first's 90pt height"
+        );
 
         // Same window/container height as before -- only the first
         // child's own min-height changed, the way `Splitter::on_drag`
         // calling `CodeEditor::set_height` does to a sibling.
-        *a.as_any().downcast_ref::<Resizable>().unwrap().min.write().unwrap() = Point::new(100.0, 200.0);
+        *a.as_any()
+            .downcast_ref::<Resizable>()
+            .unwrap()
+            .min
+            .write()
+            .unwrap() = Point::new(100.0, 200.0);
 
         let after = vtile.bounds_of(&ctx, 1);
         assert_eq!(
@@ -815,7 +823,12 @@ mod tests {
         let before = htile.bounds_of(&ctx, 1);
         assert_eq!(before.left, 240.0);
 
-        *a.as_any().downcast_ref::<Resizable>().unwrap().min.write().unwrap() = Point::new(300.0, 400.0);
+        *a.as_any()
+            .downcast_ref::<Resizable>()
+            .unwrap()
+            .min
+            .write()
+            .unwrap() = Point::new(300.0, 400.0);
 
         let after = htile.bounds_of(&ctx, 1);
         assert_eq!(
@@ -824,5 +837,4 @@ mod tests {
              immediately, matching what a Splitter drag needs"
         );
     }
-
 }

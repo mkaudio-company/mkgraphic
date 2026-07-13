@@ -19,12 +19,14 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSCursor, NSEvent, NSGraphicsContext, NSMenu,
-    NSMenuItem, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSSavePanel, NSView, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSAutoresizingMaskOptions,
+    NSBackingStoreType, NSCursor, NSEvent, NSGraphicsContext, NSMenu, NSMenuItem,
+    NSModalResponseOK, NSOpenPanel, NSPasteboard, NSSavePanel, NSView, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSNotification, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_foundation::{
+    MainThreadMarker, NSNotification, NSPoint, NSRect, NSSize, NSString, NSTimer,
+};
 
 use super::{CloseBehavior, Window};
 
@@ -826,7 +828,9 @@ declare_class!(
 
 impl MenuActionTarget {
     fn new(mtm: MainThreadMarker, callback: Arc<dyn Fn() + Send + Sync>) -> Retained<Self> {
-        let this = mtm.alloc::<Self>().set_ivars(MenuActionTargetIvars { callback });
+        let this = mtm
+            .alloc::<Self>()
+            .set_ivars(MenuActionTargetIvars { callback });
         unsafe { msg_send_id![super(this), init] }
     }
 }
@@ -865,7 +869,9 @@ declare_class!(
 
 impl WindowFocusDelegate {
     fn new(mtm: MainThreadMarker, callback: Box<dyn Fn()>) -> Retained<Self> {
-        let this = mtm.alloc::<Self>().set_ivars(WindowFocusDelegateIvars { callback });
+        let this = mtm
+            .alloc::<Self>()
+            .set_ivars(WindowFocusDelegateIvars { callback });
         unsafe { msg_send_id![super(this), init] }
     }
 }

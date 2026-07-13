@@ -822,10 +822,19 @@ impl CodeEditor {
         let visible_ratio = (viewport.height() / content_height).min(1.0);
         let thumb_height = (track.height() * visible_ratio).max(20.0);
         let scroll_range = (content_height - viewport.height()).max(0.0);
-        let scroll_ratio = if scroll_range > 0.0 { scroll_y / scroll_range } else { 0.0 };
+        let scroll_ratio = if scroll_range > 0.0 {
+            scroll_y / scroll_range
+        } else {
+            0.0
+        };
         let thumb_y = track.top + scroll_ratio * (track.height() - thumb_height);
 
-        Rect::new(track.left + 2.0, thumb_y, track.right - 2.0, thumb_y + thumb_height)
+        Rect::new(
+            track.left + 2.0,
+            thumb_y,
+            track.right - 2.0,
+            thumb_y + thumb_height,
+        )
     }
 
     fn h_thumb_rect(&self, ctx: &Context) -> Rect {
@@ -840,10 +849,19 @@ impl CodeEditor {
         let visible_ratio = (viewport.width() / content_width).min(1.0);
         let thumb_width = (track.width() * visible_ratio).max(20.0);
         let scroll_range = (content_width - viewport.width()).max(0.0);
-        let scroll_ratio = if scroll_range > 0.0 { scroll_x / scroll_range } else { 0.0 };
+        let scroll_ratio = if scroll_range > 0.0 {
+            scroll_x / scroll_range
+        } else {
+            0.0
+        };
         let thumb_x = track.left + scroll_ratio * (track.width() - thumb_width);
 
-        Rect::new(thumb_x, track.top + 2.0, thumb_x + thumb_width, track.bottom - 2.0)
+        Rect::new(
+            thumb_x,
+            track.top + 2.0,
+            thumb_x + thumb_width,
+            track.bottom - 2.0,
+        )
     }
 
     fn draw_scrollbars(&self, ctx: &Context) {
@@ -940,7 +958,13 @@ impl CodeEditor {
         self.set_scroll(ctx, new_x, new_y);
     }
 
-    fn draw_gutter(&self, ctx: &Context, first_visible_line: usize, visible_lines: usize, line_offset: f32) {
+    fn draw_gutter(
+        &self,
+        ctx: &Context,
+        first_visible_line: usize,
+        visible_lines: usize,
+        line_offset: f32,
+    ) {
         let mut canvas = ctx.canvas.borrow_mut();
         let gutter_rect = Rect::new(
             ctx.bounds.left,
@@ -969,7 +993,12 @@ impl CodeEditor {
                 canvas.fill_style(self.severity_color(severity));
                 let dot_y = y - self.font_size * 0.35;
                 canvas.fill_round_rect(
-                    Rect::new(ctx.bounds.left + 4.0, dot_y - 3.0, ctx.bounds.left + 10.0, dot_y + 3.0),
+                    Rect::new(
+                        ctx.bounds.left + 4.0,
+                        dot_y - 3.0,
+                        ctx.bounds.left + 10.0,
+                        dot_y + 3.0,
+                    ),
                     3.0,
                 );
             }
@@ -1032,9 +1061,17 @@ impl CodeEditor {
                 for m in find_matches.iter().filter(|m| m.line == line_index) {
                     let x1 = text_left + canvas.text_width_to_position(line, m.column);
                     let x2 = text_left
-                        + canvas.text_width_to_position(line, (m.column + query_len).min(line.chars().count()));
+                        + canvas.text_width_to_position(
+                            line,
+                            (m.column + query_len).min(line.chars().count()),
+                        );
                     canvas.fill_style(self.find_match_color);
-                    canvas.fill_rect(Rect::new(x1, y_top, x2.max(x1 + 2.0), y_top + self.line_height));
+                    canvas.fill_rect(Rect::new(
+                        x1,
+                        y_top,
+                        x2.max(x1 + 2.0),
+                        y_top + self.line_height,
+                    ));
                 }
             }
 
@@ -1608,13 +1645,25 @@ mod editor_interaction_tests {
             modifiers: 0,
             pos: click_pos,
         };
-        assert!(editor.handle_click(&ctx, down), "mouse-down should be handled");
+        assert!(
+            editor.handle_click(&ctx, down),
+            "mouse-down should be handled"
+        );
 
-        let up = MouseButton { down: false, ..down };
+        let up = MouseButton {
+            down: false,
+            ..down
+        };
         editor.handle_click(&ctx, up);
 
         for c in text.chars() {
-            let handled = editor.handle_text(&ctx, TextInfo { codepoint: c, modifiers: 0 });
+            let handled = editor.handle_text(
+                &ctx,
+                TextInfo {
+                    codepoint: c,
+                    modifiers: 0,
+                },
+            );
             assert!(handled, "handle_text should accept '{c}' once focused");
         }
     }
@@ -1649,7 +1698,10 @@ mod editor_interaction_tests {
             action: crate::view::KeyAction::Press,
             modifiers: 0,
         };
-        assert!(editor.handle_key(&ctx, key), "Left arrow should be handled once focused");
+        assert!(
+            editor.handle_key(&ctx, key),
+            "Left arrow should be handled once focused"
+        );
         let after = *editor.cursor.read().unwrap();
         assert_ne!(before, after, "cursor should move after pressing Left");
     }
@@ -1684,7 +1736,8 @@ mod editor_interaction_tests {
             }
         }
 
-        let output = std::sync::Arc::new(CodeEditor::new().width(200.0).height(90.0).stretch_y(0.0));
+        let output =
+            std::sync::Arc::new(CodeEditor::new().width(200.0).height(90.0).stretch_y(0.0));
         let vtile = VTile::from_vec(vec![
             crate::element::share(StretchySibling),
             output.clone() as crate::element::ElementPtr,
@@ -1700,7 +1753,11 @@ mod editor_interaction_tests {
         // should go to `output` -- it should render at exactly its own
         // 90pt min, not 90 + 105 (half of 210).
         let initial = vtile.bounds_of(&ctx, 1);
-        assert_eq!(initial.height(), 90.0, "output should render at exactly its own min, claiming none of the extra");
+        assert_eq!(
+            initial.height(),
+            90.0,
+            "output should render at exactly its own min, claiming none of the extra"
+        );
 
         // Drag the output panel's height up by 100pt (what `Splitter`'s
         // callback does) -- the window itself hasn't resized.

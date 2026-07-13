@@ -89,9 +89,9 @@ pub mod prelude {
         tree::{tree_node, tree_view, TreeNode, TreeView},
         Element, ElementPtr, ViewLimits, ViewStretch, WeakElementPtr,
     };
-    pub use crate::host::{App, CloseBehavior, Window, WindowBuilder, WindowStyle};
     #[cfg(target_os = "macos")]
     pub use crate::host::{choose_file_to_open, choose_file_to_save, choose_folder};
+    pub use crate::host::{App, CloseBehavior, Window, WindowBuilder, WindowStyle};
     pub use crate::support::{
         canvas::Canvas,
         color::{colors, Color},

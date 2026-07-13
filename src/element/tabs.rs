@@ -582,7 +582,12 @@ impl Element for TabBar {
     }
 
     fn clear_focus(&self) {
-        if let Some(tab) = self.tabs.read().unwrap().get(*self.active_index.read().unwrap()) {
+        if let Some(tab) = self
+            .tabs
+            .read()
+            .unwrap()
+            .get(*self.active_index.read().unwrap())
+        {
             if let Some(ref content) = tab.content {
                 content.clear_focus();
             }
@@ -669,22 +674,40 @@ mod tab_bar_focus_forwarding_tests {
             modifiers: 0,
             pos: click_pos,
         };
-        assert!(bar.handle_click(&ctx, down), "click into the content area should be handled");
+        assert!(
+            bar.handle_click(&ctx, down),
+            "click into the content area should be handled"
+        );
 
         assert!(
-            bar.handle_text(&ctx, TextInfo { codepoint: 'h', modifiers: 0 }),
+            bar.handle_text(
+                &ctx,
+                TextInfo {
+                    codepoint: 'h',
+                    modifiers: 0
+                }
+            ),
             "typed text should reach the active tab's content"
         );
         assert!(
             bar.handle_key(
                 &ctx,
-                KeyInfo { key: KeyCode::Left, action: KeyAction::Press, modifiers: 0 }
+                KeyInfo {
+                    key: KeyCode::Left,
+                    action: KeyAction::Press,
+                    modifiers: 0
+                }
             ),
             "arrow keys should reach the active tab's content"
         );
 
-        assert_eq!(editor.as_any().downcast_ref::<crate::element::code_editor::CodeEditor>()
-            .unwrap()
-            .get_text(), "h");
+        assert_eq!(
+            editor
+                .as_any()
+                .downcast_ref::<crate::element::code_editor::CodeEditor>()
+                .unwrap()
+                .get_text(),
+            "h"
+        );
     }
 }

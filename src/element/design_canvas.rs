@@ -402,7 +402,13 @@ impl Element for DesignCanvas {
         }
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+    fn hit_test(
+        &self,
+        ctx: &Context,
+        p: Point,
+        _leaf: bool,
+        _control: bool,
+    ) -> Option<&dyn Element> {
         // Unlike before, `children` sits behind a `RwLock` (needed so a
         // palette can add/remove children through `&self` at runtime --
         // see that field's doc comment), so there's no way to hand back a

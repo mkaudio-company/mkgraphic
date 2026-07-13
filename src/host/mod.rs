@@ -193,8 +193,9 @@ impl Window {
     fn new_with_options(builder: WindowBuilder) -> Self {
         #[cfg(target_os = "macos")]
         let macos_window = {
-            MainThreadMarker::new()
-                .map(|mtm| MacOSWindow::new_with_style(&builder.title, builder.size, builder.style, mtm))
+            MainThreadMarker::new().map(|mtm| {
+                MacOSWindow::new_with_style(&builder.title, builder.size, builder.style, mtm)
+            })
         };
         #[cfg(target_os = "windows")]
         let windows_window = WindowsWindow::new(&builder.title, builder.size);

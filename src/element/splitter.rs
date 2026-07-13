@@ -98,7 +98,11 @@ impl Element for Splitter {
     fn draw(&self, ctx: &Context) {
         let mut canvas = ctx.canvas.borrow_mut();
         let active = *self.dragging.read().unwrap() || *self.hovering.read().unwrap();
-        let color = if active { self.active_color } else { self.color };
+        let color = if active {
+            self.active_color
+        } else {
+            self.color
+        };
         canvas.fill_style(color.with_alpha(if active { 0.7 } else { 0.4 }));
         canvas.fill_rect(ctx.bounds);
     }
@@ -221,9 +225,15 @@ mod tests {
         let delta_total = StdArc::new(StdMutex::new(0.0f32));
         let recorded = delta_total.clone();
 
-        let sidebar = Dummy { min: Point::new(240.0, 720.0), stretch: ViewStretch::new(0.0, 1.0) };
+        let sidebar = Dummy {
+            min: Point::new(240.0, 720.0),
+            stretch: ViewStretch::new(0.0, 1.0),
+        };
         let split = vsplitter().on_drag(move |delta| *recorded.lock().unwrap() += delta);
-        let main = Dummy { min: Point::new(200.0, 720.0), stretch: ViewStretch::new(1.0, 1.0) };
+        let main = Dummy {
+            min: Point::new(200.0, 720.0),
+            stretch: ViewStretch::new(1.0, 1.0),
+        };
 
         let htile = HTile::from_vec(vec![share(sidebar), share(split), share(main)]);
 
@@ -246,12 +256,21 @@ mod tests {
             modifiers: 0,
             pos: click_pos,
         };
-        assert!(htile.handle_click(&ctx, down), "mouse-down on the splitter should be handled");
+        assert!(
+            htile.handle_click(&ctx, down),
+            "mouse-down on the splitter should be handled"
+        );
 
-        let dragged = MouseButton { pos: Point::new(300.0, 300.0), ..down };
+        let dragged = MouseButton {
+            pos: Point::new(300.0, 300.0),
+            ..down
+        };
         htile.handle_drag(&ctx, dragged);
 
-        let up = MouseButton { down: false, ..dragged };
+        let up = MouseButton {
+            down: false,
+            ..dragged
+        };
         htile.handle_click(&ctx, up);
 
         assert_eq!(
@@ -280,24 +299,39 @@ mod tests {
         // and each element's position is exactly its neighbors' mins added
         // up (no need to separately account for an HTile row stretching
         // every child, including the sidebar, to match its tallest one).
-        let sidebar = Dummy { min: Point::new(240.0, 496.0), stretch: ViewStretch::new(0.0, 1.0) };
+        let sidebar = Dummy {
+            min: Point::new(240.0, 496.0),
+            stretch: ViewStretch::new(0.0, 1.0),
+        };
         let vsplit = vsplitter().on_drag({
             let v_delta = v_delta.clone();
             move |delta| *v_delta.lock().unwrap() += delta
         });
 
-        let tab_bar = Dummy { min: Point::new(200.0, 400.0), stretch: ViewStretch::new(1.0, 1.0) };
+        let tab_bar = Dummy {
+            min: Point::new(200.0, 400.0),
+            stretch: ViewStretch::new(1.0, 1.0),
+        };
         let hsplit = splitter().on_drag({
             let h_delta = h_delta.clone();
             move |delta| *h_delta.lock().unwrap() += delta
         });
-        let output = Dummy { min: Point::new(200.0, 90.0), stretch: ViewStretch::new(1.0, 0.0) };
+        let output = Dummy {
+            min: Point::new(200.0, 90.0),
+            stretch: ViewStretch::new(1.0, 0.0),
+        };
         let main_area = VTile::from_vec(vec![share(tab_bar), share(hsplit), share(output)]);
 
         let body = HTile::from_vec(vec![share(sidebar), share(vsplit), share(main_area)]);
 
-        let top = Dummy { min: Point::new(900.0, 20.0), stretch: ViewStretch::new(1.0, 0.0) };
-        let status = Dummy { min: Point::new(900.0, 20.0), stretch: ViewStretch::new(1.0, 0.0) };
+        let top = Dummy {
+            min: Point::new(900.0, 20.0),
+            stretch: ViewStretch::new(1.0, 0.0),
+        };
+        let status = Dummy {
+            min: Point::new(900.0, 20.0),
+            stretch: ViewStretch::new(1.0, 0.0),
+        };
         let content = VTile::from_vec(vec![share(top), share(body), share(status)]);
 
         let window_height = 20.0 + 496.0 + 20.0;
@@ -308,20 +342,72 @@ mod tests {
 
         // Vertical splitter: right after the sidebar, well within the body row's height.
         let v_click = Point::new(242.0, 300.0);
-        let down = MouseButton { down: true, click_count: 1, button: MouseButtonKind::Left, modifiers: 0, pos: v_click };
-        assert!(content.handle_click(&ctx, down), "click on the vertical splitter should be handled");
-        content.handle_drag(&ctx, MouseButton { pos: Point::new(300.0, 300.0), ..down });
-        content.handle_click(&ctx, MouseButton { down: false, pos: Point::new(300.0, 300.0), ..down });
-        assert_eq!(*v_delta.lock().unwrap(), 58.0, "vertical splitter delta should reach its callback through 2 levels of nesting");
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: v_click,
+        };
+        assert!(
+            content.handle_click(&ctx, down),
+            "click on the vertical splitter should be handled"
+        );
+        content.handle_drag(
+            &ctx,
+            MouseButton {
+                pos: Point::new(300.0, 300.0),
+                ..down
+            },
+        );
+        content.handle_click(
+            &ctx,
+            MouseButton {
+                down: false,
+                pos: Point::new(300.0, 300.0),
+                ..down
+            },
+        );
+        assert_eq!(
+            *v_delta.lock().unwrap(),
+            58.0,
+            "vertical splitter delta should reach its callback through 2 levels of nesting"
+        );
 
         // Horizontal splitter: `top`(20) + `tab_bar`(400) + a couple px
         // into the 6pt-thick splitter itself.
         let h_click = Point::new(500.0, 422.0);
         assert_eq!(20.0 + 400.0 + 2.0, h_click.y);
-        let down = MouseButton { down: true, click_count: 1, button: MouseButtonKind::Left, modifiers: 0, pos: h_click };
-        assert!(content.handle_click(&ctx, down), "click on the horizontal splitter should be handled");
-        content.handle_drag(&ctx, MouseButton { pos: Point::new(500.0, 460.0), ..down });
-        content.handle_click(&ctx, MouseButton { down: false, pos: Point::new(500.0, 460.0), ..down });
-        assert_eq!(*h_delta.lock().unwrap(), 38.0, "horizontal splitter delta should reach its callback through 3 levels of nesting");
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: h_click,
+        };
+        assert!(
+            content.handle_click(&ctx, down),
+            "click on the horizontal splitter should be handled"
+        );
+        content.handle_drag(
+            &ctx,
+            MouseButton {
+                pos: Point::new(500.0, 460.0),
+                ..down
+            },
+        );
+        content.handle_click(
+            &ctx,
+            MouseButton {
+                down: false,
+                pos: Point::new(500.0, 460.0),
+                ..down
+            },
+        );
+        assert_eq!(
+            *h_delta.lock().unwrap(),
+            38.0,
+            "horizontal splitter delta should reach its callback through 3 levels of nesting"
+        );
     }
 }
