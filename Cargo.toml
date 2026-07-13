@@ -38,8 +38,8 @@ streaming-iterator = "0.1"
 # Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSData", "NSNotification", "NSThread", "NSRunLoop", "NSTimer", "NSDate", "block2"] }
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSView", "NSEvent", "NSResponder", "NSGraphicsContext", "NSColor", "NSCursor", "NSPasteboard", "NSScreen", "NSTrackingArea", "NSText", "NSRunningApplication", "NSGraphics", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSArray", "NSEnumerator", "NSData", "NSNotification", "NSThread", "NSRunLoop", "NSTimer", "NSDate", "NSURL", "block2"] }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSWindow", "NSView", "NSEvent", "NSResponder", "NSGraphicsContext", "NSColor", "NSCursor", "NSPasteboard", "NSScreen", "NSTrackingArea", "NSText", "NSRunningApplication", "NSGraphics", "NSMenu", "NSMenuItem", "NSPanel", "NSOpenPanel", "NSSavePanel"] }
 core-graphics = "0.23"
 core-foundation = "0.9"
 foreign-types = "0.5"

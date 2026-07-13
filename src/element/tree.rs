@@ -86,7 +86,7 @@ pub struct TreeView {
     disclosure_color: Color,
     row_height: f32,
     indent: f32,
-    width: f32,
+    width: RwLock<f32>,
     height: f32,
     enabled: bool,
     on_select: Option<TreeSelectCallback>,
@@ -110,7 +110,7 @@ impl TreeView {
             disclosure_color: theme.label_font_color.with_alpha(0.7),
             row_height: 24.0,
             indent: 14.0,
-            width: 200.0,
+            width: RwLock::new(200.0),
             height: 400.0,
             enabled: true,
             on_select: None,
@@ -132,9 +132,21 @@ impl TreeView {
 
     /// Sets the view size.
     pub fn size(mut self, width: f32, height: f32) -> Self {
-        self.width = width;
+        self.width = RwLock::new(width);
         self.height = height;
         self
+    }
+
+    /// Returns the current width (see `set_width`).
+    pub fn get_width(&self) -> f32 {
+        *self.width.read().unwrap()
+    }
+
+    /// Adjusts the width at runtime, e.g. from a `Splitter`'s drag
+    /// callback. Clamped to a small minimum so a drag can't collapse the
+    /// sidebar to nothing.
+    pub fn set_width(&self, width: f32) {
+        *self.width.write().unwrap() = width.max(80.0);
     }
 
     /// Sets the per-level indent, in points.
@@ -327,7 +339,7 @@ impl Element for TreeView {
         // sidebar tree should stay at least this size, not be capped at
         // exactly this size forever regardless of how much room its
         // container actually has.
-        ViewLimits::min_size(self.width, self.height)
+        ViewLimits::min_size(*self.width.read().unwrap(), self.height)
     }
 
     fn stretch(&self) -> ViewStretch {

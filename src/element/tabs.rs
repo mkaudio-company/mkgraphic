@@ -6,7 +6,7 @@ use crate::support::color::Color;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
 use crate::support::theme::get_theme;
-use crate::view::{CursorTracking, MouseButton, MouseButtonKind};
+use crate::view::{CursorTracking, KeyInfo, MouseButton, MouseButtonKind, TextInfo};
 use std::any::Any;
 use std::sync::RwLock;
 
@@ -516,6 +516,79 @@ impl Element for TabBar {
         true
     }
 
+    // Without these, an editor placed as a tab's content (e.g. MKIDE's
+    // per-file `CodeEditor`s) never received a single keystroke or scroll
+    // event: `handle_click` above already forwards to the active tab's
+    // content, which sets *that* content's own internal focus state and
+    // makes it look focused (caret and all) -- but with no `handle_key`/
+    // `handle_text` override here, the default `Element` impls (`false`,
+    // unconditionally) meant every keystroke was silently swallowed before
+    // ever reaching the content. Looked exactly like a read-only editor.
+    fn key(&mut self, ctx: &Context, k: KeyInfo) -> bool {
+        self.handle_key(ctx, k)
+    }
+
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
+        let active = *self.active_index.read().unwrap();
+        let tabs = self.tabs.read().unwrap();
+        let Some(tab) = tabs.get(active) else {
+            return false;
+        };
+        let Some(ref content) = tab.content else {
+            return false;
+        };
+        let content_rect = self.content_rect(ctx);
+        let content_ctx = ctx.with_bounds(content_rect);
+        content.handle_key(&content_ctx, k)
+    }
+
+    fn text(&mut self, ctx: &Context, info: TextInfo) -> bool {
+        self.handle_text(ctx, info)
+    }
+
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
+        let active = *self.active_index.read().unwrap();
+        let tabs = self.tabs.read().unwrap();
+        let Some(tab) = tabs.get(active) else {
+            return false;
+        };
+        let Some(ref content) = tab.content else {
+            return false;
+        };
+        let content_rect = self.content_rect(ctx);
+        let content_ctx = ctx.with_bounds(content_rect);
+        content.handle_text(&content_ctx, info)
+    }
+
+    fn scroll(&mut self, ctx: &Context, dir: Point, p: Point) -> bool {
+        self.handle_scroll(ctx, dir, p)
+    }
+
+    fn handle_scroll(&self, ctx: &Context, dir: Point, p: Point) -> bool {
+        let active = *self.active_index.read().unwrap();
+        let tabs = self.tabs.read().unwrap();
+        let Some(tab) = tabs.get(active) else {
+            return false;
+        };
+        let Some(ref content) = tab.content else {
+            return false;
+        };
+        let content_rect = self.content_rect(ctx);
+        if !content_rect.contains(p) {
+            return false;
+        }
+        let content_ctx = ctx.with_bounds(content_rect);
+        content.handle_scroll(&content_ctx, dir, p)
+    }
+
+    fn clear_focus(&self) {
+        if let Some(tab) = self.tabs.read().unwrap().get(*self.active_index.read().unwrap()) {
+            if let Some(ref content) = tab.content {
+                content.clear_focus();
+            }
+        }
+    }
+
     fn cursor(&mut self, ctx: &Context, p: Point, status: CursorTracking) -> bool {
         match status {
             CursorTracking::Leaving => {
@@ -562,4 +635,56 @@ pub fn tab_bar() -> TabBar {
 /// Creates a tab.
 pub fn tab(label: impl Into<String>) -> Tab {
     Tab::new(label)
+}
+
+#[cfg(test)]
+mod tab_bar_focus_forwarding_tests {
+    use super::*;
+    use crate::element::code_editor::code_editor;
+    use crate::support::canvas::Canvas;
+    use crate::view::{KeyAction, KeyCode, MouseButtonKind, TextInfo};
+    use std::cell::RefCell;
+
+    /// A `CodeEditor` hosted as a tab's content used to never receive a
+    /// single keystroke -- `TabBar` forwarded clicks (so the editor looked
+    /// focused, caret and all) but had no `handle_key`/`handle_text`
+    /// override, so the default no-op `Element` impls silently swallowed
+    /// every keystroke before it reached the editor. Indistinguishable
+    /// from the editor being read-only. This reproduces that exact path.
+    #[test]
+    fn typing_through_tab_bar_reaches_active_tab_content() {
+        let editor = share(code_editor().text(""));
+        let bar = TabBar::new().tabs(vec![Tab::new("file.rs").content_ptr(editor.clone())]);
+
+        let view = crate::view::View::new(crate::support::point::Extent::new(700.0, 400.0));
+        let canvas = RefCell::new(Canvas::new(700, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 700.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let click_pos = Point::new(60.0, 200.0);
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: click_pos,
+        };
+        assert!(bar.handle_click(&ctx, down), "click into the content area should be handled");
+
+        assert!(
+            bar.handle_text(&ctx, TextInfo { codepoint: 'h', modifiers: 0 }),
+            "typed text should reach the active tab's content"
+        );
+        assert!(
+            bar.handle_key(
+                &ctx,
+                KeyInfo { key: KeyCode::Left, action: KeyAction::Press, modifiers: 0 }
+            ),
+            "arrow keys should reach the active tab's content"
+        );
+
+        assert_eq!(editor.as_any().downcast_ref::<crate::element::code_editor::CodeEditor>()
+            .unwrap()
+            .get_text(), "h");
+    }
 }

@@ -13,7 +13,7 @@ mod windows;
 mod linux;
 
 #[cfg(target_os = "macos")]
-pub use macos::{MacOSApp, MacOSWindow};
+pub use macos::{choose_file_to_open, choose_file_to_save, choose_folder, MacOSApp, MacOSWindow};
 
 #[cfg(target_os = "windows")]
 pub use self::windows::{WindowsApp, WindowsTimer, WindowsWindow};
@@ -193,7 +193,8 @@ impl Window {
     fn new_with_options(builder: WindowBuilder) -> Self {
         #[cfg(target_os = "macos")]
         let macos_window = {
-            MainThreadMarker::new().map(|mtm| MacOSWindow::new(&builder.title, builder.size, mtm))
+            MainThreadMarker::new()
+                .map(|mtm| MacOSWindow::new_with_style(&builder.title, builder.size, builder.style, mtm))
         };
         #[cfg(target_os = "windows")]
         let windows_window = WindowsWindow::new(&builder.title, builder.size);
@@ -296,6 +297,18 @@ impl Window {
         if let Some(ref win) = self.linux_window {
             win.set_content(content);
         }
+    }
+
+    /// Calls `callback` whenever this window becomes the key (frontmost)
+    /// window. macOS-only for now (a silent no-op elsewhere) -- see
+    /// `MacOSWindow::on_focus`.
+    pub fn on_focus(&self, callback: impl Fn() + 'static) {
+        #[cfg(target_os = "macos")]
+        if let Some(ref win) = self.macos_window {
+            win.on_focus(callback);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = callback;
     }
 
     /// Shows the window.

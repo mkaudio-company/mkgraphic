@@ -78,6 +78,7 @@ pub mod prelude {
         share,
         size::*,
         slider::{slider, vslider, Slider, SliderOrientation},
+        splitter::{splitter, vsplitter, Splitter, SplitterOrientation},
         status_bar::{status_bar, StatusBar, StatusSegment},
         switch::{slide_switch, SlideSwitch},
         tabs::{tab_bar, Tab, TabBar},
@@ -88,7 +89,9 @@ pub mod prelude {
         tree::{tree_node, tree_view, TreeNode, TreeView},
         Element, ElementPtr, ViewLimits, ViewStretch, WeakElementPtr,
     };
-    pub use crate::host::{App, CloseBehavior, Window};
+    pub use crate::host::{App, CloseBehavior, Window, WindowBuilder, WindowStyle};
+    #[cfg(target_os = "macos")]
+    pub use crate::host::{choose_file_to_open, choose_file_to_save, choose_folder};
     pub use crate::support::{
         canvas::Canvas,
         color::{colors, Color},

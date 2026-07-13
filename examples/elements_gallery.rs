@@ -20,7 +20,18 @@ fn main() {
         margin(10.0, create_gallery()),
     ];
 
-    window.set_content(share(content));
+    // The gallery is taller (and, with the design canvas able to grow
+    // wider than its constructed size now, sometimes wider) than any
+    // reasonable window -- wrapped in a `ScrollView` so everything past the
+    // window's edge is still reachable instead of simply cut off. No
+    // `.content_size()` call: `ScrollView` auto-sizes to the content's own
+    // real layout size unless told otherwise, so this tracks the gallery's
+    // actual content instead of a hand-maintained guess.
+    // `Auto` (both axes) is `ScrollView`'s own default -- no need to name
+    // `ScrollbarVisibility` here just to ask for what it already does.
+    let scrollable = scroll_view().content(content).size(900.0, 700.0);
+
+    window.set_content(share(scrollable));
     window.show();
     app.run();
 }
@@ -184,7 +195,15 @@ fn create_editor_gallery() -> impl Element {
         margin(
             10.0,
             vtile![
-                section_label("Code Editor (tree-sitter Rust highlighting)"),
+                // `section_label` is a plain `Label` with no line-wrapping,
+                // so its reported min-width is its *entire* text at a
+                // fixed chars-per-point estimate -- keep these short. A
+                // long enough caption here previously bloated this whole
+                // page's computed content width well past what it visually
+                // needed (confirmed: ~89 characters alone pushed it from
+                // ~900pt to ~1229pt), distorting how much space every
+                // stretchy column absorbed.
+                section_label("Code Editor (tree-sitter)"),
                 margin(
                     5.0,
                     code_editor()
@@ -198,7 +217,10 @@ fn create_editor_gallery() -> impl Element {
         margin(
             10.0,
             vtile![
-                section_label("Design Canvas (drag to move, corner/edge handles to resize, drag near a sibling to snap)"),
+                // Full instructions: drag to move, corner/edge handles to
+                // resize, drag near a sibling to snap. Kept short here --
+                // see the `Code Editor` section label's comment for why.
+                section_label("Design Canvas"),
                 margin(5.0, create_design_canvas_demo()),
             ]
         ),
@@ -224,7 +246,7 @@ impl Counter {
 "#;
 
 fn create_design_canvas_demo() -> impl Element {
-    let mut canvas = design_canvas(420.0, 240.0)
+    let canvas = design_canvas(420.0, 240.0)
         .on_selection_changed(|index| println!("Design canvas selection: {:?}", index))
         .on_layout_changed(|| println!("Design canvas layout changed"));
 

@@ -149,6 +149,25 @@ impl<S: Element + 'static> Element for MarginElement<S> {
         }
     }
 
+    fn stretch(&self) -> super::ViewStretch {
+        // Without this, every `margin(...)` used the `Element` trait's
+        // default stretch (1.0, 1.0) regardless of what the wrapped
+        // subject actually wants -- `limits()` right above already
+        // correctly delegates to the subject, but `stretch()` didn't, so a
+        // margin-wrapped non-stretchy element (e.g. a fixed-size checkbox)
+        // still claimed a full, equal share of a `VTile`/`HTile`'s "extra"
+        // space alongside genuinely stretchy siblings. Since the
+        // margin-wrapped element's own `limits().max` correctly still
+        // capped it at its true (non-growing) size, that claimed share
+        // then got clamped straight back down and simply discarded --
+        // never reaching the sibling that should have received it.
+        // Confirmed via direct layout tracing: exactly half of a VTile's
+        // available extra height was being computed, allocated to a
+        // `margin(4.0, checkbox(...))`, and then thrown away this way,
+        // leaving a matching blank gap at the bottom of the window.
+        self.subject.stretch()
+    }
+
     fn draw(&self, ctx: &Context) {
         let adjusted_bounds = self.adjust_bounds(ctx.bounds);
         let adjusted_ctx = ctx.with_bounds(adjusted_bounds);
@@ -309,4 +328,86 @@ pub fn margin_horizontal<S: Element>(value: f32, subject: S) -> MarginElement<S>
 /// Adds vertical margin to an element.
 pub fn margin_vertical<S: Element>(value: f32, subject: S) -> MarginElement<S> {
     MarginElement::new(Margin::vertical(value), subject)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::element::ViewStretch;
+    use crate::support::canvas::Canvas;
+    use crate::element::tile::VTile;
+    use crate::element::{share, composite::CompositeBase};
+
+    struct NonStretchy;
+    impl Element for NonStretchy {
+        fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
+            ViewLimits::fixed(50.0, 26.0)
+        }
+        fn stretch(&self) -> ViewStretch {
+            ViewStretch::new(0.0, 0.0)
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    struct Stretchy;
+    impl Element for Stretchy {
+        fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
+            ViewLimits::min_size(50.0, 100.0)
+        }
+        fn stretch(&self) -> ViewStretch {
+            ViewStretch::new(0.0, 1.0)
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    /// `margin(...)` used to report the `Element` trait's default stretch
+    /// (1.0, 1.0) regardless of what its wrapped subject actually wanted --
+    /// `limits()` already correctly delegated, `stretch()` didn't. In a
+    /// `VTile` alongside a genuinely stretchy sibling, this meant a
+    /// margin-wrapped *non*-stretchy element (e.g. a fixed-size checkbox)
+    /// still claimed an equal share of "extra" space in the stretch
+    /// calculation -- which its own (correctly delegated) `limits().max`
+    /// then immediately clamped back down, discarding that share instead
+    /// of it reaching the sibling that should have received it. Net
+    /// effect: part of a window's height went nowhere, rendering as a
+    /// blank gap. This reproduces the exact scenario (a `margin`-wrapped
+    /// fixed checkbox next to a stretchy sibling in a `VTile`) and checks
+    /// the stretchy sibling receives *all* the extra, not half of it.
+    #[test]
+    fn margin_delegates_stretch_to_its_subject() {
+        let wrapped = MarginElement::new(Margin::uniform(4.0), NonStretchy);
+        assert_eq!(
+            wrapped.stretch(),
+            ViewStretch::new(0.0, 0.0),
+            "margin should report its subject's stretch, not the Element trait's default (1,1)"
+        );
+
+        let vtile = VTile::from_vec(vec![share(wrapped), share(Stretchy)]);
+        let view = crate::view::View::new(crate::support::point::Extent::new(200.0, 400.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(200, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 200.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let non_stretchy_bounds = vtile.bounds_of(&ctx, 0);
+        let stretchy_bounds = vtile.bounds_of(&ctx, 1);
+
+        // Margin-wrapped element: exactly its own min (4+4 margin + 26
+        // content = 34), never any share of "extra".
+        assert_eq!(non_stretchy_bounds.height(), 34.0);
+        // The stretchy sibling should receive *all* 366pt of extra
+        // (400 total - 34 margin-wrapped - 100 stretchy min - wait: total
+        // min = 34 + 100 = 134, extra = 400 - 134 = 266), not half of it
+        // discarded by the margin-wrapped sibling clamping its share away.
+        assert_eq!(stretchy_bounds.height(), 400.0 - 34.0, "stretchy sibling should absorb all the extra space, none of it lost");
+    }
 }

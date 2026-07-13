@@ -63,14 +63,14 @@ type LayoutChangeCallback = Box<dyn Fn() + Send + Sync>;
 /// A design surface: children positioned by absolute rect, with selection,
 /// drag-move, drag-resize, and snap guides.
 pub struct DesignCanvas {
-    // Plain field (not RwLock<Vec<_>>), matching `Composite`'s convention:
-    // structural changes (add/remove) need `&mut self`, so `hit_test`'s
-    // `&self`-elided return of `&dyn Element` can borrow straight through
-    // `self.children[i].content` without a lock guard whose lifetime would
-    // be shorter than `&self`'s. Each child's own `rect` is still an
-    // interior-mutable `RwLock` (see `CanvasChild`), since drag/resize only
-    // ever need to update that, not the Vec's shape.
-    children: Vec<CanvasChild>,
+    // Behind a lock (not a plain `Vec`, despite the tension that creates
+    // with `hit_test`'s borrow -- see that method) so a WYSIWYG designer's
+    // component palette can add/remove children through `&self` at
+    // runtime: once mounted, this canvas is shared as `Arc<dyn Element>`,
+    // and an owning `&mut self` is never available again after
+    // construction. Each child's own `rect` is separately interior-mutable
+    // (see `CanvasChild`) for drag/resize, same as before.
+    children: RwLock<Vec<CanvasChild>>,
     selected: RwLock<Option<usize>>,
     drag: RwLock<Option<DragState>>,
     guides: RwLock<Vec<Guide>>,
@@ -90,7 +90,7 @@ impl DesignCanvas {
     pub fn new(width: f32, height: f32) -> Self {
         let theme = get_theme();
         Self {
-            children: Vec::new(),
+            children: RwLock::new(Vec::new()),
             selected: RwLock::new(None),
             drag: RwLock::new(None),
             guides: RwLock::new(Vec::new()),
@@ -124,24 +124,40 @@ impl DesignCanvas {
 
     /// Adds a child at `rect`, returning its index (stable for the child's
     /// lifetime; used by [`Self::child_rect`]/[`Self::set_child_rect`]/
-    /// [`Self::remove_child`]). Build up a canvas's children before sharing
-    /// it (e.g. via [`share`]) -- structural changes need `&mut self`, while
-    /// every other interaction (drag, select, draw, hit-test) only needs
-    /// `&self` and works fine behind `Arc`.
-    pub fn add_child<E: Element + 'static>(&mut self, content: E, rect: Rect) -> usize {
-        self.children.push(CanvasChild {
+    /// [`Self::remove_child`]). Works both before sharing a canvas (e.g. via
+    /// [`share`]) and afterward through `&self` -- e.g. a WYSIWYG designer's
+    /// component palette adding a new widget to an already-mounted canvas.
+    pub fn add_child<E: Element + 'static>(&self, content: E, rect: Rect) -> usize {
+        let mut children = self.children.write().unwrap();
+        children.push(CanvasChild {
             content: share(content),
             rect: RwLock::new(rect),
         });
-        self.children.len() - 1
+        children.len() - 1
+    }
+
+    /// Same as [`Self::add_child`], but from an already-shared `ElementPtr`
+    /// rather than wrapping a fresh owned `E` in a second `Arc` via
+    /// `share()` -- needed when the caller keeps its own handle to the same
+    /// widget (mirrors `Tab::content_ptr`/`VTile::from_vec`'s reason for
+    /// existing: there's no blanket `Element` impl for `ElementPtr` itself).
+    pub fn add_child_ptr(&self, content: ElementPtr, rect: Rect) -> usize {
+        let mut children = self.children.write().unwrap();
+        children.push(CanvasChild {
+            content,
+            rect: RwLock::new(rect),
+        });
+        children.len() - 1
     }
 
     /// Removes the child at `index`. Indices of children after it shift down
     /// by one; re-fetch any index you were holding onto after calling this.
-    pub fn remove_child(&mut self, index: usize) {
-        if index < self.children.len() {
-            self.children.remove(index);
+    pub fn remove_child(&self, index: usize) {
+        let mut children = self.children.write().unwrap();
+        if index < children.len() {
+            children.remove(index);
         }
+        drop(children);
         let mut selected = self.selected.write().unwrap();
         if *selected == Some(index) {
             *selected = None;
@@ -150,18 +166,22 @@ impl DesignCanvas {
 
     /// Returns the number of children currently on the canvas.
     pub fn child_count(&self) -> usize {
-        self.children.len()
+        self.children.read().unwrap().len()
     }
 
     /// Returns child `index`'s current rect, if it exists.
     pub fn child_rect(&self, index: usize) -> Option<Rect> {
-        self.children.get(index).map(|c| *c.rect.read().unwrap())
+        self.children
+            .read()
+            .unwrap()
+            .get(index)
+            .map(|c| *c.rect.read().unwrap())
     }
 
     /// Sets child `index`'s rect directly (e.g. from a property-inspector
     /// panel, rather than a drag gesture).
     pub fn set_child_rect(&self, index: usize, rect: Rect) {
-        if let Some(child) = self.children.get(index) {
+        if let Some(child) = self.children.read().unwrap().get(index) {
             *child.rect.write().unwrap() = rect;
         }
     }
@@ -184,19 +204,48 @@ impl DesignCanvas {
         }
     }
 
+    /// The canvas's own visible/paintable area. Just `ctx.bounds` --
+    /// `self.width`/`self.height` are only the *minimum* size now (see
+    /// `Element::limits`'s `min_size`), so clamping to them here would
+    /// leave whatever extra space a `stretch`-aware container handed out
+    /// unpainted (a real gap that showed up next to the canvas in the
+    /// elements_gallery example once it was allocated more than its
+    /// constructed width).
     fn canvas_bounds(&self, ctx: &Context) -> Rect {
+        ctx.bounds
+    }
+
+    /// Converts a child's stored rect (canvas-local -- `(0, 0)` is this
+    /// canvas's own top-left corner, matching what callers of
+    /// `add_child`/`set_child_rect` naturally pass) into the absolute
+    /// window coordinates `draw`/hit-testing actually need, by adding this
+    /// canvas's own origin (`ctx.bounds.left`/`.top`, which is wherever its
+    /// *own* parent placed it -- e.g. below a toolbar row).
+    ///
+    /// Every other coordinate this canvas hands to a child (`draw`'s
+    /// `ctx.with_bounds`, hit-testing against a click's absolute position)
+    /// must go through this: without it, a child positioned at say `(20,
+    /// 20)` renders and hit-tests at literal window position `(20, 20)`
+    /// regardless of where the canvas itself sits, which usually isn't
+    /// even inside the canvas's own visible area at all. `apply_drag`'s
+    /// own math is the one exception -- it only ever computes *deltas*
+    /// between two absolute pointer positions, which are translation-
+    /// invariant, so it can keep working in canvas-local space throughout.
+    fn absolute_rect(&self, ctx: &Context, local: Rect) -> Rect {
         Rect::new(
-            ctx.bounds.left,
-            ctx.bounds.top,
-            ctx.bounds.left + self.width,
-            ctx.bounds.top + self.height,
+            ctx.bounds.left + local.left,
+            ctx.bounds.top + local.top,
+            ctx.bounds.left + local.right,
+            ctx.bounds.top + local.bottom,
         )
     }
 
     /// Hit-tests children topmost-first (last added = drawn last = on top).
-    fn hit_child(&self, _ctx: &Context, p: Point) -> Option<usize> {
-        for (i, child) in self.children.iter().enumerate().rev() {
-            if child.rect.read().unwrap().contains(p) {
+    fn hit_child(&self, ctx: &Context, p: Point) -> Option<usize> {
+        let children = self.children.read().unwrap();
+        for (i, child) in children.iter().enumerate().rev() {
+            let rect = self.absolute_rect(ctx, *child.rect.read().unwrap());
+            if rect.contains(p) {
                 return Some(i);
             }
         }
@@ -243,6 +292,8 @@ impl DesignCanvas {
         let mut guides = Vec::new();
         let siblings: Vec<Rect> = self
             .children
+            .read()
+            .unwrap()
             .iter()
             .enumerate()
             .filter(|(i, _)| *i != state.child_index)
@@ -304,14 +355,15 @@ impl Element for DesignCanvas {
             canvas.fill_rect(bounds);
         }
 
-        for child in self.children.iter() {
-            let rect = *child.rect.read().unwrap();
+        for child in self.children.read().unwrap().iter() {
+            let rect = self.absolute_rect(ctx, *child.rect.read().unwrap());
             let child_ctx = ctx.with_bounds(rect);
             child.content.draw(&child_ctx);
         }
 
         if let Some(index) = self.selected_index() {
-            if let Some(rect) = self.child_rect(index) {
+            if let Some(local_rect) = self.child_rect(index) {
+                let rect = self.absolute_rect(ctx, local_rect);
                 let mut canvas = ctx.canvas.borrow_mut();
                 canvas.stroke_style(self.selection_color);
                 canvas.line_width(1.5);
@@ -350,23 +402,22 @@ impl Element for DesignCanvas {
         }
     }
 
-    fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
+    fn hit_test(&self, ctx: &Context, p: Point, _leaf: bool, _control: bool) -> Option<&dyn Element> {
+        // Unlike before, `children` sits behind a `RwLock` (needed so a
+        // palette can add/remove children through `&self` at runtime --
+        // see that field's doc comment), so there's no way to hand back a
+        // `&dyn Element` borrowed from a child's content with a lifetime
+        // tied to `&self`: the read guard needed to reach it doesn't live
+        // that long. Same fix as `TabBar::hit_test`: report ourselves as
+        // the hit target for the whole canvas rather than forwarding into
+        // nested content -- `handle_click`/`draw` (which don't need to
+        // return a reference) still do the real per-child work.
         let bounds = self.canvas_bounds(ctx);
-        if !bounds.contains(p) {
-            return None;
+        if bounds.contains(p) {
+            Some(self)
+        } else {
+            None
         }
-        if let Some(index) = self.hit_child(ctx, p) {
-            if let Some(child_rect) = self.child_rect(index) {
-                let child_ctx = ctx.with_bounds(child_rect);
-                if let Some(hit) = self.children[index]
-                    .content
-                    .hit_test(&child_ctx, p, leaf, control)
-                {
-                    return Some(hit);
-                }
-            }
-        }
-        Some(self)
     }
 
     fn wants_control(&self) -> bool {
@@ -392,10 +443,14 @@ impl Element for DesignCanvas {
         }
 
         // Resize handle on the already-selected child takes priority over
-        // re-selecting/moving.
+        // re-selecting/moving. `handle_rects` needs the *absolute* rect to
+        // compare against `btn.pos`, but `start_rect` must stay
+        // canvas-local -- that's the space `apply_drag`/`set_child_rect`
+        // work in.
         if let Some(index) = self.selected_index() {
             if let Some(rect) = self.child_rect(index) {
-                for (kind, handle_rect) in self.handle_rects(rect) {
+                let absolute_rect = self.absolute_rect(ctx, rect);
+                for (kind, handle_rect) in self.handle_rects(absolute_rect) {
                     if handle_rect.contains(btn.pos) {
                         *self.drag.write().unwrap() = Some(DragState {
                             child_index: index,

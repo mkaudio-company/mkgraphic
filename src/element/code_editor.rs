@@ -82,7 +82,19 @@ pub struct CodeEditor {
     lines: RwLock<Vec<String>>,
     cursor: RwLock<CursorPos>,
     selection_anchor: RwLock<Option<CursorPos>>,
-    scroll_offset: RwLock<f32>,
+    /// `.x` = horizontal scroll in points, `.y` = vertical scroll in points
+    /// (not lines -- see [`Self::visible_line_window`] for how that maps
+    /// back to a first-visible-line-plus-pixel-remainder for smooth,
+    /// not line-snapped, scrolling).
+    scroll_offset: RwLock<Point>,
+    /// Width of the widest line in the buffer, in points -- the horizontal
+    /// scrollbar's extent. Only recomputed when `content_width_dirty` is
+    /// set (by `reparse`, i.e. once per edit) rather than every `draw` --
+    /// scanning every line's text width is a real cost for a few-hundred-
+    /// line file, and doing it 60 times a second regardless of whether the
+    /// buffer changed was the direct cause of scrolling feeling sluggish.
+    content_width: RwLock<f32>,
+    content_width_dirty: RwLock<bool>,
     state: RwLock<EditorState>,
     undo_stack: RwLock<Vec<Vec<String>>>,
     redo_stack: RwLock<Vec<Vec<String>>>,
@@ -104,13 +116,22 @@ pub struct CodeEditor {
     warning_color: Color,
     info_color: Color,
     caret_color: Color,
+    scrollbar_color: Color,
+    scrollbar_hover_color: Color,
+    scrollbar_width: f32,
     font_size: f32,
     line_height: f32,
     gutter_width: f32,
     width: f32,
-    height: f32,
+    height: RwLock<f32>,
+    /// Vertical stretch factor -- see `stretch_y`'s doc comment.
+    stretch_y: f32,
     enabled: bool,
     on_change: Option<TextChangeCallback>,
+    dragging_v: RwLock<bool>,
+    dragging_h: RwLock<bool>,
+    drag_start: RwLock<Point>,
+    drag_start_scroll: RwLock<Point>,
 }
 
 impl CodeEditor {
@@ -133,7 +154,9 @@ impl CodeEditor {
             lines: RwLock::new(vec![String::new()]),
             cursor: RwLock::new(CursorPos::default()),
             selection_anchor: RwLock::new(None),
-            scroll_offset: RwLock::new(0.0),
+            scroll_offset: RwLock::new(Point::zero()),
+            content_width: RwLock::new(0.0),
+            content_width_dirty: RwLock::new(true),
             state: RwLock::new(EditorState::Idle),
             undo_stack: RwLock::new(Vec::new()),
             redo_stack: RwLock::new(Vec::new()),
@@ -154,13 +177,21 @@ impl CodeEditor {
             warning_color: Color::from_rgb_u32(0xf5a623),
             info_color: Color::from_rgb_u32(0x4a9fe5),
             caret_color: theme.text_box_caret_color,
+            scrollbar_color: theme.scrollbar_color,
+            scrollbar_hover_color: theme.scrollbar_color.level(1.3),
+            scrollbar_width: theme.scrollbar_width,
             font_size: theme.text_box_font_size,
             line_height: theme.text_box_font_size * 1.4,
             gutter_width: 48.0,
             width: 600.0,
-            height: 400.0,
+            height: RwLock::new(400.0),
+            stretch_y: 1.0,
             enabled: true,
             on_change: None,
+            dragging_v: RwLock::new(false),
+            dragging_h: RwLock::new(false),
+            drag_start: RwLock::new(Point::zero()),
+            drag_start_scroll: RwLock::new(Point::zero()),
         };
         editor.reparse();
         editor
@@ -182,7 +213,32 @@ impl CodeEditor {
 
     /// Sets the height.
     pub fn height(mut self, height: f32) -> Self {
-        self.height = height;
+        self.height = RwLock::new(height);
+        self
+    }
+
+    /// Returns the current height (see `set_height`).
+    pub fn get_height(&self) -> f32 {
+        *self.height.read().unwrap()
+    }
+
+    /// Adjusts the height at runtime, e.g. from a `Splitter`'s drag
+    /// callback. Clamped to a small minimum so a drag can't collapse the
+    /// editor to nothing.
+    pub fn set_height(&self, height: f32) {
+        *self.height.write().unwrap() = height.max(40.0);
+    }
+
+    /// Sets the vertical stretch factor (default `1.0`, matching every
+    /// other stretchy element). Set this to `0.0` for an editor whose
+    /// height should be driven *only* by `set_height` (e.g. a `Splitter`)
+    /// and never by a `VTile` sibling competing for "extra" space --
+    /// without this, a log panel with equal stretch to its stretchy
+    /// neighbor only moved at half the speed of the mouse while dragging
+    /// their shared splitter (both siblings split the delta), which read
+    /// as the drag being broken/capped rather than just slow.
+    pub fn stretch_y(mut self, stretch_y: f32) -> Self {
+        self.stretch_y = stretch_y;
         self
     }
 
@@ -329,7 +385,7 @@ impl CodeEditor {
         *self.lines.write().unwrap() = lines;
         *self.cursor.write().unwrap() = CursorPos::default();
         *self.selection_anchor.write().unwrap() = None;
-        *self.scroll_offset.write().unwrap() = 0.0;
+        *self.scroll_offset.write().unwrap() = Point::zero();
         self.reparse();
     }
 
@@ -337,6 +393,40 @@ impl CodeEditor {
         let snapshot = self.lines.read().unwrap().clone();
         self.undo_stack.write().unwrap().push(snapshot);
         self.redo_stack.write().unwrap().clear();
+    }
+
+    /// Appends one line to the end of the buffer, without touching the
+    /// cursor, selection, or undo history -- built for read-only log
+    /// panels (e.g. MKIDE's build/run/test/debug output) that get many
+    /// small appends as a process streams output, rather than being edited
+    /// by hand. Scrolls to the bottom afterward so newly streamed lines
+    /// stay visible instead of silently landing off-screen.
+    pub fn append_line(&self, line: &str) {
+        {
+            let mut lines = self.lines.write().unwrap();
+            // The buffer starts as one empty-string line (see `new()`) --
+            // replace that placeholder instead of leaving a stray blank
+            // line before the first real one.
+            if lines.len() == 1 && lines[0].is_empty() {
+                lines[0] = line.to_string();
+            } else {
+                lines.push(line.to_string());
+            }
+        }
+        self.reparse();
+        self.scroll_to_bottom();
+    }
+
+    /// Scrolls to the last line. Uses the editor's own configured height
+    /// as an approximation of the actual rendered viewport height (exact
+    /// only when no horizontal scrollbar is showing to shave a few points
+    /// off it) since no `Context` is available outside of draw/event
+    /// handling -- close enough to reliably reveal the last few lines.
+    pub fn scroll_to_bottom(&self) {
+        let content_height = self.content_height();
+        let viewport_height = *self.height.read().unwrap();
+        let max_y = (content_height - viewport_height).max(0.0);
+        self.scroll_offset.write().unwrap().y = max_y;
     }
 
     fn undo(&self) {
@@ -389,8 +479,11 @@ impl CodeEditor {
     fn reparse(&self) {
         // Called after every edit, so this is also the one place that keeps
         // find-match positions in sync with the buffer, regardless of
-        // whether tree-sitter highlighting itself is available below.
+        // whether tree-sitter highlighting itself is available below. Also
+        // the one place that marks the cached content width stale -- see
+        // `content_width`'s doc comment.
         self.recompute_find_matches();
+        *self.content_width_dirty.write().unwrap() = true;
 
         let Some(query) = &self.query else {
             return;
@@ -639,13 +732,221 @@ impl CodeEditor {
         }
     }
 
-    fn draw_gutter(&self, ctx: &Context, first_visible_line: usize, visible_lines: usize) {
+    /// Widest line in the buffer, measured with the editor's own font.
+    fn measure_content_width(&self, ctx: &Context) -> f32 {
+        let mut canvas = ctx.canvas.borrow_mut();
+        let theme = get_theme();
+        canvas.font(theme.text_box_font);
+        canvas.font_size(self.font_size);
+        self.lines
+            .read()
+            .unwrap()
+            .iter()
+            .map(|l| canvas.text_width(l))
+            .fold(0.0, f32::max)
+    }
+
+    fn content_height(&self) -> f32 {
+        self.lines.read().unwrap().len() as f32 * self.line_height
+    }
+
+    /// Whole-editor-bounds check, not the (possibly already-narrowed-by-the-
+    /// other-scrollbar) viewport -- avoids the two scrollbars' visibility
+    /// depending on each other, matching `ScrollView`'s equivalent tradeoff.
+    fn needs_v_scrollbar(&self, ctx: &Context) -> bool {
+        self.content_height() > ctx.bounds.height()
+    }
+
+    fn needs_h_scrollbar(&self, ctx: &Context) -> bool {
+        *self.content_width.read().unwrap() > ctx.bounds.width() - self.gutter_width
+    }
+
+    /// Full editor area minus whichever scrollbar(s) are showing.
+    fn viewport_rect(&self, ctx: &Context) -> Rect {
+        let has_v = self.needs_v_scrollbar(ctx);
+        let has_h = self.needs_h_scrollbar(ctx);
+        Rect::new(
+            ctx.bounds.left,
+            ctx.bounds.top,
+            ctx.bounds.right - if has_v { self.scrollbar_width } else { 0.0 },
+            ctx.bounds.bottom - if has_h { self.scrollbar_width } else { 0.0 },
+        )
+    }
+
+    /// Where text (not the gutter) is drawn/scrolled/clipped.
+    fn text_viewport(&self, ctx: &Context) -> Rect {
+        let viewport = self.viewport_rect(ctx);
+        Rect::new(
+            viewport.left + self.gutter_width,
+            viewport.top,
+            viewport.right,
+            viewport.bottom,
+        )
+    }
+
+    fn v_scrollbar_rect(&self, ctx: &Context) -> Rect {
+        if !self.needs_v_scrollbar(ctx) {
+            return Rect::zero();
+        }
+        let has_h = self.needs_h_scrollbar(ctx);
+        Rect::new(
+            ctx.bounds.right - self.scrollbar_width,
+            ctx.bounds.top,
+            ctx.bounds.right,
+            ctx.bounds.bottom - if has_h { self.scrollbar_width } else { 0.0 },
+        )
+    }
+
+    fn h_scrollbar_rect(&self, ctx: &Context) -> Rect {
+        if !self.needs_h_scrollbar(ctx) {
+            return Rect::zero();
+        }
+        let has_v = self.needs_v_scrollbar(ctx);
+        Rect::new(
+            ctx.bounds.left + self.gutter_width,
+            ctx.bounds.bottom - self.scrollbar_width,
+            ctx.bounds.right - if has_v { self.scrollbar_width } else { 0.0 },
+            ctx.bounds.bottom,
+        )
+    }
+
+    fn v_thumb_rect(&self, ctx: &Context) -> Rect {
+        let track = self.v_scrollbar_rect(ctx);
+        if track.is_empty() {
+            return Rect::zero();
+        }
+        let content_height = self.content_height();
+        let viewport = self.text_viewport(ctx);
+        let scroll_y = self.scroll_offset.read().unwrap().y;
+
+        let visible_ratio = (viewport.height() / content_height).min(1.0);
+        let thumb_height = (track.height() * visible_ratio).max(20.0);
+        let scroll_range = (content_height - viewport.height()).max(0.0);
+        let scroll_ratio = if scroll_range > 0.0 { scroll_y / scroll_range } else { 0.0 };
+        let thumb_y = track.top + scroll_ratio * (track.height() - thumb_height);
+
+        Rect::new(track.left + 2.0, thumb_y, track.right - 2.0, thumb_y + thumb_height)
+    }
+
+    fn h_thumb_rect(&self, ctx: &Context) -> Rect {
+        let track = self.h_scrollbar_rect(ctx);
+        if track.is_empty() {
+            return Rect::zero();
+        }
+        let content_width = *self.content_width.read().unwrap();
+        let viewport = self.text_viewport(ctx);
+        let scroll_x = self.scroll_offset.read().unwrap().x;
+
+        let visible_ratio = (viewport.width() / content_width).min(1.0);
+        let thumb_width = (track.width() * visible_ratio).max(20.0);
+        let scroll_range = (content_width - viewport.width()).max(0.0);
+        let scroll_ratio = if scroll_range > 0.0 { scroll_x / scroll_range } else { 0.0 };
+        let thumb_x = track.left + scroll_ratio * (track.width() - thumb_width);
+
+        Rect::new(thumb_x, track.top + 2.0, thumb_x + thumb_width, track.bottom - 2.0)
+    }
+
+    fn draw_scrollbars(&self, ctx: &Context) {
+        let mut canvas = ctx.canvas.borrow_mut();
+
+        if self.needs_v_scrollbar(ctx) {
+            let track = self.v_scrollbar_rect(ctx);
+            let thumb = self.v_thumb_rect(ctx);
+            canvas.fill_style(self.scrollbar_color.with_alpha(0.2));
+            canvas.fill_rect(track);
+            let color = if *self.dragging_v.read().unwrap() {
+                self.scrollbar_hover_color
+            } else {
+                self.scrollbar_color
+            };
+            canvas.fill_style(color);
+            canvas.fill_round_rect(thumb, 3.0);
+        }
+
+        if self.needs_h_scrollbar(ctx) {
+            let track = self.h_scrollbar_rect(ctx);
+            let thumb = self.h_thumb_rect(ctx);
+            canvas.fill_style(self.scrollbar_color.with_alpha(0.2));
+            canvas.fill_rect(track);
+            let color = if *self.dragging_h.read().unwrap() {
+                self.scrollbar_hover_color
+            } else {
+                self.scrollbar_color
+            };
+            canvas.fill_style(color);
+            canvas.fill_round_rect(thumb, 3.0);
+        }
+
+        if self.needs_v_scrollbar(ctx) && self.needs_h_scrollbar(ctx) {
+            let corner = Rect::new(
+                ctx.bounds.right - self.scrollbar_width,
+                ctx.bounds.bottom - self.scrollbar_width,
+                ctx.bounds.right,
+                ctx.bounds.bottom,
+            );
+            canvas.fill_style(self.scrollbar_color.with_alpha(0.3));
+            canvas.fill_rect(corner);
+        }
+    }
+
+    /// Clamps and stores a new scroll position against the current content
+    /// size -- the single place both wheel-scroll and scrollbar-thumb-drag
+    /// funnel through, so neither can push the view past the buffer's
+    /// actual extent.
+    fn set_scroll(&self, ctx: &Context, x: f32, y: f32) {
+        let content_width = *self.content_width.read().unwrap();
+        let content_height = self.content_height();
+        let viewport = self.text_viewport(ctx);
+        let max_x = (content_width - viewport.width()).max(0.0);
+        let max_y = (content_height - viewport.height()).max(0.0);
+        *self.scroll_offset.write().unwrap() = Point::new(x.clamp(0.0, max_x), y.clamp(0.0, max_y));
+    }
+
+    /// Nudges scroll (both axes) just enough to bring the cursor back
+    /// inside the visible viewport, without moving it more than necessary
+    /// (a cursor already in view is left alone). Called after every
+    /// key-driven cursor move/edit -- see `handle_key`/`handle_text`.
+    fn scroll_cursor_into_view(&self, ctx: &Context) {
+        let cursor = *self.cursor.read().unwrap();
+        let scroll = *self.scroll_offset.read().unwrap();
+        let viewport = self.text_viewport(ctx);
+
+        let cursor_top = cursor.line as f32 * self.line_height;
+        let cursor_bottom = cursor_top + self.line_height;
+        let new_y = if cursor_top < scroll.y {
+            cursor_top
+        } else if cursor_bottom > scroll.y + viewport.height() {
+            cursor_bottom - viewport.height()
+        } else {
+            scroll.y
+        };
+
+        let cursor_x = {
+            let lines = self.lines.read().unwrap();
+            let mut canvas = ctx.canvas.borrow_mut();
+            let theme = get_theme();
+            canvas.font(theme.text_box_font);
+            canvas.font_size(self.font_size);
+            canvas.text_width_to_position(&lines[cursor.line], cursor.column)
+        };
+        let new_x = if cursor_x < scroll.x {
+            cursor_x
+        } else if cursor_x > scroll.x + viewport.width() {
+            cursor_x - viewport.width()
+        } else {
+            scroll.x
+        };
+
+        self.set_scroll(ctx, new_x, new_y);
+    }
+
+    fn draw_gutter(&self, ctx: &Context, first_visible_line: usize, visible_lines: usize, line_offset: f32) {
         let mut canvas = ctx.canvas.borrow_mut();
         let gutter_rect = Rect::new(
             ctx.bounds.left,
             ctx.bounds.top,
             ctx.bounds.left + self.gutter_width,
-            ctx.bounds.bottom,
+            self.viewport_rect(ctx).bottom,
         );
         canvas.fill_style(self.gutter_color);
         canvas.fill_rect(gutter_rect);
@@ -660,9 +961,9 @@ impl CodeEditor {
             if line_index >= lines.len() {
                 break;
             }
-            let y = ctx.bounds.top - self.scroll_offset.read().unwrap().fract() * 0.0
-                + (row as f32 + 1.0) * self.line_height
-                - self.line_height * 0.3;
+            let y = ctx.bounds.top + (row as f32 + 1.0) * self.line_height
+                - self.line_height * 0.3
+                - line_offset;
 
             if let Some(severity) = self.diagnostic_severity_for_line(line_index) {
                 canvas.fill_style(self.severity_color(severity));
@@ -685,11 +986,15 @@ impl CodeEditor {
         ctx: &Context,
         first_visible_line: usize,
         visible_lines: usize,
+        line_offset: f32,
     ) {
+        let text_viewport = self.text_viewport(ctx);
         let mut canvas = ctx.canvas.borrow_mut();
         let theme = get_theme();
         canvas.font(theme.text_box_font);
         canvas.font_size(self.font_size);
+        canvas.save();
+        canvas.clip(text_viewport);
 
         let lines = self.lines.read().unwrap();
         let cursor = *self.cursor.read().unwrap();
@@ -697,7 +1002,8 @@ impl CodeEditor {
         let highlights = self.highlights.read().unwrap();
         let find_matches = self.find_matches.read().unwrap();
         let query_len = self.find_query.read().unwrap().chars().count();
-        let text_left = ctx.bounds.left + self.gutter_width + 6.0;
+        let scroll_x = self.scroll_offset.read().unwrap().x;
+        let text_left = ctx.bounds.left + self.gutter_width + 6.0 - scroll_x;
 
         for row in 0..visible_lines {
             let line_index = first_visible_line + row;
@@ -705,7 +1011,7 @@ impl CodeEditor {
                 break;
             }
             let line = &lines[line_index];
-            let y_top = ctx.bounds.top + row as f32 * self.line_height;
+            let y_top = ctx.bounds.top + row as f32 * self.line_height - line_offset;
             let y_baseline = y_top + self.line_height - self.font_size * 0.3;
 
             // Faint full-line tint for a diagnostic on this line, drawn
@@ -772,19 +1078,27 @@ impl CodeEditor {
                 canvas.stroke();
             }
         }
+
+        canvas.restore();
     }
 
-    fn visible_line_window(&self, ctx: &Context) -> (usize, usize) {
-        let scroll = *self.scroll_offset.read().unwrap();
-        let first = (scroll / self.line_height).floor().max(0.0) as usize;
-        let visible = (ctx.bounds.height() / self.line_height).ceil() as usize + 1;
-        (first, visible)
+    /// Returns `(first_visible_line, visible_line_count, line_offset)`.
+    /// `line_offset` is the sub-line-height pixel remainder of the vertical
+    /// scroll (`scroll.y - first_visible_line * line_height`), applied as a
+    /// y-offset when drawing so scrolling is smooth rather than snapped to
+    /// whole lines.
+    fn visible_line_window(&self, ctx: &Context) -> (usize, usize, f32) {
+        let scroll_y = self.scroll_offset.read().unwrap().y;
+        let first = (scroll_y / self.line_height).floor().max(0.0) as usize;
+        let line_offset = scroll_y - first as f32 * self.line_height;
+        let visible = (self.text_viewport(ctx).height() / self.line_height).ceil() as usize + 1;
+        (first, visible, line_offset)
     }
 
     fn cursor_pos_from_click(&self, ctx: &Context, p: Point) -> CursorPos {
         let lines = self.lines.read().unwrap();
         let scroll = *self.scroll_offset.read().unwrap();
-        let row = (((p.y - ctx.bounds.top + scroll) / self.line_height)
+        let row = (((p.y - ctx.bounds.top + scroll.y) / self.line_height)
             .floor()
             .max(0.0)) as usize;
         let line = row.min(lines.len().saturating_sub(1));
@@ -794,7 +1108,7 @@ impl CodeEditor {
         let theme = get_theme();
         canvas.font(theme.text_box_font);
         canvas.font_size(self.font_size);
-        let text_left = ctx.bounds.left + self.gutter_width + 6.0;
+        let text_left = ctx.bounds.left + self.gutter_width + 6.0 - scroll.x;
         let rel_x = p.x - text_left;
 
         let char_count = line_text.chars().count();
@@ -824,11 +1138,11 @@ impl Element for CodeEditor {
         // the *entire* surrounding column/row at that size forever, however
         // wide the window grows -- confirmed as the cause of MKIDE's editor
         // area never resizing past the ~700pt it was constructed with.
-        ViewLimits::min_size(self.width, self.height)
+        ViewLimits::min_size(self.width, *self.height.read().unwrap())
     }
 
     fn stretch(&self) -> ViewStretch {
-        ViewStretch::new(1.0, 1.0)
+        ViewStretch::new(1.0, self.stretch_y)
     }
 
     fn draw(&self, ctx: &Context) {
@@ -837,9 +1151,14 @@ impl Element for CodeEditor {
             canvas.fill_style(self.background_color);
             canvas.fill_rect(ctx.bounds);
         }
-        let (first, visible) = self.visible_line_window(ctx);
-        self.draw_selection_and_text(ctx, first, visible);
-        self.draw_gutter(ctx, first, visible);
+        if *self.content_width_dirty.read().unwrap() {
+            *self.content_width.write().unwrap() = self.measure_content_width(ctx);
+            *self.content_width_dirty.write().unwrap() = false;
+        }
+        let (first, visible, line_offset) = self.visible_line_window(ctx);
+        self.draw_selection_and_text(ctx, first, visible, line_offset);
+        self.draw_gutter(ctx, first, visible, line_offset);
+        self.draw_scrollbars(ctx);
     }
 
     fn hit_test(
@@ -885,12 +1204,63 @@ impl Element for CodeEditor {
             return false;
         }
         if btn.down {
+            if self.v_thumb_rect(ctx).contains(btn.pos) {
+                *self.dragging_v.write().unwrap() = true;
+                *self.drag_start.write().unwrap() = btn.pos;
+                *self.drag_start_scroll.write().unwrap() = *self.scroll_offset.read().unwrap();
+                return true;
+            }
+            if self.h_thumb_rect(ctx).contains(btn.pos) {
+                *self.dragging_h.write().unwrap() = true;
+                *self.drag_start.write().unwrap() = btn.pos;
+                *self.drag_start_scroll.write().unwrap() = *self.scroll_offset.read().unwrap();
+                return true;
+            }
             *self.state.write().unwrap() = EditorState::Focused;
             let pos = self.cursor_pos_from_click(ctx, btn.pos);
             *self.cursor.write().unwrap() = pos;
             *self.selection_anchor.write().unwrap() = None;
+        } else {
+            *self.dragging_v.write().unwrap() = false;
+            *self.dragging_h.write().unwrap() = false;
         }
         true
+    }
+
+    fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        let drag_start = *self.drag_start.read().unwrap();
+        let start_scroll = *self.drag_start_scroll.read().unwrap();
+
+        if *self.dragging_v.read().unwrap() {
+            let track = self.v_scrollbar_rect(ctx);
+            let thumb = self.v_thumb_rect(ctx);
+            let viewport = self.text_viewport(ctx);
+            let delta_y = btn.pos.y - drag_start.y;
+            let track_range = track.height() - thumb.height();
+            let scroll_range = (self.content_height() - viewport.height()).max(0.0);
+            if track_range > 0.0 {
+                let new_y = start_scroll.y + delta_y * scroll_range / track_range;
+                self.set_scroll(ctx, start_scroll.x, new_y);
+            }
+        }
+
+        if *self.dragging_h.read().unwrap() {
+            let track = self.h_scrollbar_rect(ctx);
+            let thumb = self.h_thumb_rect(ctx);
+            let viewport = self.text_viewport(ctx);
+            let content_width = *self.content_width.read().unwrap();
+            let delta_x = btn.pos.x - drag_start.x;
+            let track_range = track.width() - thumb.width();
+            let scroll_range = (content_width - viewport.width()).max(0.0);
+            if track_range > 0.0 {
+                let new_x = start_scroll.x + delta_x * scroll_range / track_range;
+                self.set_scroll(ctx, new_x, start_scroll.y);
+            }
+        }
     }
 
     fn cursor(&mut self, _ctx: &Context, _p: Point, status: CursorTracking) -> bool {
@@ -912,10 +1282,8 @@ impl Element for CodeEditor {
         if !self.enabled {
             return false;
         }
-        let lines = self.lines.read().unwrap();
-        let max_scroll = (lines.len() as f32 * self.line_height - ctx.bounds.height()).max(0.0);
-        let mut scroll = self.scroll_offset.write().unwrap();
-        *scroll = (*scroll - dir.y).clamp(0.0, max_scroll);
+        let scroll = *self.scroll_offset.read().unwrap();
+        self.set_scroll(ctx, scroll.x - dir.x, scroll.y - dir.y);
         true
     }
 
@@ -923,7 +1291,7 @@ impl Element for CodeEditor {
         self.handle_key(ctx, k)
     }
 
-    fn handle_key(&self, _ctx: &Context, k: KeyInfo) -> bool {
+    fn handle_key(&self, ctx: &Context, k: KeyInfo) -> bool {
         if !self.enabled || *self.state.read().unwrap() != EditorState::Focused {
             return false;
         }
@@ -952,6 +1320,12 @@ impl Element for CodeEditor {
             KeyCode::Y if ctrl => self.redo(),
             _ => return false,
         }
+        // Without this, moving the cursor past whatever's currently
+        // scrolled into view (e.g. holding Down past the bottom line, or
+        // End on a line wider than the viewport) left the caret invisible
+        // off-screen with nothing on screen changing -- indistinguishable
+        // from arrow keys simply not working.
+        self.scroll_cursor_into_view(ctx);
         true
     }
 
@@ -959,13 +1333,14 @@ impl Element for CodeEditor {
         self.handle_text(ctx, info)
     }
 
-    fn handle_text(&self, _ctx: &Context, info: TextInfo) -> bool {
+    fn handle_text(&self, ctx: &Context, info: TextInfo) -> bool {
         if !self.enabled || *self.state.read().unwrap() != EditorState::Focused {
             return false;
         }
         let c = info.codepoint;
         if !c.is_control() {
             self.insert_text(&c.to_string());
+            self.scroll_cursor_into_view(ctx);
         }
         true
     }
@@ -1207,3 +1582,134 @@ const RUST_HIGHLIGHT_QUERY: &str = r#"
   "dyn" "break" "continue" "true" "false" "self" "Self"
 ] @keyword
 "#;
+
+#[cfg(test)]
+mod editor_interaction_tests {
+    use super::*;
+    use crate::support::canvas::Canvas;
+    use crate::view::{MouseButtonKind, TextInfo};
+    use std::cell::RefCell;
+
+    fn click_and_type(editor: &CodeEditor, click_pos: Point, text: &str) {
+        let view = crate::view::View::new(crate::support::point::Extent::new(700.0, 400.0));
+        let canvas = RefCell::new(Canvas::new(700, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 700.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        assert!(
+            editor.hit_test(&ctx, click_pos, false, false).is_some(),
+            "hit_test should find the editor at {click_pos:?}"
+        );
+
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: click_pos,
+        };
+        assert!(editor.handle_click(&ctx, down), "mouse-down should be handled");
+
+        let up = MouseButton { down: false, ..down };
+        editor.handle_click(&ctx, up);
+
+        for c in text.chars() {
+            let handled = editor.handle_text(&ctx, TextInfo { codepoint: c, modifiers: 0 });
+            assert!(handled, "handle_text should accept '{c}' once focused");
+        }
+    }
+
+    #[test]
+    fn click_then_type_inserts_text() {
+        let editor = CodeEditor::new().text("");
+        click_and_type(&editor, Point::new(60.0, 10.0), "hi");
+        assert_eq!(editor.get_text(), "hi");
+    }
+
+    #[test]
+    fn click_then_arrow_keys_move_cursor() {
+        let editor = CodeEditor::new().text("hello");
+        let view = crate::view::View::new(crate::support::point::Extent::new(700.0, 400.0));
+        let canvas = RefCell::new(Canvas::new(700, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 700.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: Point::new(60.0, 10.0),
+        };
+        editor.handle_click(&ctx, down);
+
+        let before = *editor.cursor.read().unwrap();
+        let key = KeyInfo {
+            key: KeyCode::Left,
+            action: crate::view::KeyAction::Press,
+            modifiers: 0,
+        };
+        assert!(editor.handle_key(&ctx, key), "Left arrow should be handled once focused");
+        let after = *editor.cursor.read().unwrap();
+        assert_ne!(before, after, "cursor should move after pressing Left");
+    }
+
+    /// Reproduces the "splitter drag only moves the panel at half speed"
+    /// bug: an output-log `CodeEditor` sitting in a `VTile` next to a
+    /// stretchy sibling, with the *default* stretch (1.0), only grows by
+    /// half of whatever `set_height` sets it to -- the sibling's equal
+    /// stretch claims the other half of the "extra" space MKIDE's
+    /// `Splitter` is trying to hand entirely to the editor being dragged.
+    /// `.stretch_y(0.0)` is the fix; this locks in that it actually works
+    /// (the rendered height exactly matches `set_height`, not half of it).
+    #[test]
+    fn stretch_y_zero_makes_rendered_height_track_set_height_exactly() {
+        use crate::element::composite::CompositeBase;
+        use crate::element::tile::VTile;
+        use crate::support::point::Extent;
+
+        struct StretchySibling;
+        impl Element for StretchySibling {
+            fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
+                ViewLimits::min_size(200.0, 300.0)
+            }
+            fn stretch(&self) -> ViewStretch {
+                ViewStretch::new(1.0, 1.0)
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn Any {
+                self
+            }
+        }
+
+        let output = std::sync::Arc::new(CodeEditor::new().width(200.0).height(90.0).stretch_y(0.0));
+        let vtile = VTile::from_vec(vec![
+            crate::element::share(StretchySibling),
+            output.clone() as crate::element::ElementPtr,
+        ]);
+
+        let view = crate::view::View::new(Extent::new(200.0, 600.0));
+        let canvas = RefCell::new(Canvas::new(200, 600).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 200.0, 600.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        // 600pt window, 300pt sibling min + 90pt output min = 390pt total
+        // min, 210pt "extra". With stretch_y(0.0) *none* of that extra
+        // should go to `output` -- it should render at exactly its own
+        // 90pt min, not 90 + 105 (half of 210).
+        let initial = vtile.bounds_of(&ctx, 1);
+        assert_eq!(initial.height(), 90.0, "output should render at exactly its own min, claiming none of the extra");
+
+        // Drag the output panel's height up by 100pt (what `Splitter`'s
+        // callback does) -- the window itself hasn't resized.
+        output.set_height(190.0);
+        let after = vtile.bounds_of(&ctx, 1);
+        assert_eq!(
+            after.height(),
+            190.0,
+            "output's rendered height should track set_height exactly (1:1), not half of the delta"
+        );
+    }
+}

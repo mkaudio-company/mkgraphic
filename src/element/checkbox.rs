@@ -33,7 +33,7 @@ pub struct Checkbox {
     text_color: Color,
     box_size: f32,
     corner_radius: f32,
-    enabled: bool,
+    enabled: RwLock<bool>,
     on_change: Option<CheckCallback>,
 }
 
@@ -50,7 +50,7 @@ impl Checkbox {
             text_color: theme.label_font_color,
             box_size: 18.0,
             corner_radius: 3.0,
-            enabled: true,
+            enabled: RwLock::new(true),
             on_change: None,
         }
     }
@@ -105,6 +105,21 @@ impl Checkbox {
     pub fn toggle(&self) {
         let mut checked = self.checked.write().unwrap();
         *checked = !*checked;
+    }
+
+    /// Enables/disables interaction at runtime (e.g. from another widget's
+    /// callback -- MKIDE's New Project window disables the plugin-format
+    /// checkboxes while Standalone App is selected). Unlike the `Element::
+    /// enable` trait method (which needs `&mut self`), this works on a
+    /// `Checkbox` already shared behind an `Arc`.
+    pub fn set_enabled(&self, enabled: bool) {
+        *self.enabled.write().unwrap() = enabled;
+        let mut state = self.state.write().unwrap();
+        if !enabled {
+            *state = CheckboxState::Disabled;
+        } else if *state == CheckboxState::Disabled {
+            *state = CheckboxState::Normal;
+        }
     }
 
     fn box_rect(&self, bounds: &Rect) -> Rect {
@@ -220,7 +235,7 @@ impl Element for Checkbox {
         _leaf: bool,
         _control: bool,
     ) -> Option<&dyn Element> {
-        if ctx.bounds.contains(p) && self.enabled {
+        if ctx.bounds.contains(p) && *self.enabled.read().unwrap() {
             Some(self)
         } else {
             None
@@ -228,11 +243,11 @@ impl Element for Checkbox {
     }
 
     fn wants_control(&self) -> bool {
-        self.enabled
+        *self.enabled.read().unwrap()
     }
 
     fn handle_click(&self, ctx: &Context, btn: MouseButton) -> bool {
-        if !self.enabled || btn.button != MouseButtonKind::Left {
+        if !*self.enabled.read().unwrap() || btn.button != MouseButtonKind::Left {
             return false;
         }
 
@@ -261,7 +276,7 @@ impl Element for Checkbox {
     }
 
     fn cursor(&mut self, ctx: &Context, _p: Point, status: CursorTracking) -> bool {
-        if !self.enabled {
+        if !*self.enabled.read().unwrap() {
             return false;
         }
 
@@ -283,17 +298,11 @@ impl Element for Checkbox {
     }
 
     fn enable(&mut self, state: bool) {
-        self.enabled = state;
-        let mut checkbox_state = self.state.write().unwrap();
-        if !state {
-            *checkbox_state = CheckboxState::Disabled;
-        } else if *checkbox_state == CheckboxState::Disabled {
-            *checkbox_state = CheckboxState::Normal;
-        }
+        self.set_enabled(state);
     }
 
     fn is_enabled(&self) -> bool {
-        self.enabled
+        *self.enabled.read().unwrap()
     }
 
     fn as_any(&self) -> &dyn Any {

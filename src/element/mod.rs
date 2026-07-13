@@ -46,6 +46,7 @@ pub mod proxy;
 pub mod scroll;
 pub mod size;
 pub mod slider;
+pub mod splitter;
 pub mod status_bar;
 pub mod switch;
 pub mod tabs;

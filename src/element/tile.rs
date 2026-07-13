@@ -13,18 +13,6 @@ use std::sync::RwLock;
 /// Vertical tile element - stacks children vertically.
 pub struct VTile {
     inner: Composite,
-    tiles: RwLock<Vec<f32>>,
-    /// The height `tiles` was last computed for, so `bounds_of` can tell a
-    /// genuinely-stale cache (window/parent resized) apart from "just
-    /// computed" -- previously this only checked whether the last `tiles`
-    /// entry was `0.0`, which meant a resize (to a *different* nonzero
-    /// height) was never detected at all: the cache would freeze at
-    /// whatever height happened to be current on the very first layout
-    /// pass (sometimes a transient placeholder size reported before the
-    /// real window frame is established) and every child would keep
-    /// drawing at those stale offsets forever, overlapping instead of
-    /// stacking once the real size differed.
-    cached_height: RwLock<f32>,
     /// Index of the child currently capturing mouse drag events, if any.
     drag_capture: RwLock<Option<usize>>,
 }
@@ -34,19 +22,14 @@ impl VTile {
     pub fn new() -> Self {
         Self {
             inner: Composite::new(),
-            tiles: RwLock::new(Vec::new()),
-            cached_height: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
 
     /// Creates a vertical tile from a vector of elements.
     pub fn from_vec(children: Vec<ElementPtr>) -> Self {
-        let len = children.len();
         Self {
             inner: Composite::from_vec(children),
-            tiles: RwLock::new(vec![0.0; len + 1]),
-            cached_height: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -54,8 +37,6 @@ impl VTile {
     /// Adds an element.
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
-        self.tiles.write().unwrap().push(0.0);
-        *self.cached_height.get_mut().unwrap() = -1.0;
     }
 
     fn compute_layout(&self, ctx: &BasicContext, height: f32) -> Vec<f32> {
@@ -97,6 +78,7 @@ impl VTile {
             }
         }
         tiles[count] = y;
+        eprintln!("[verify] total_y={y} (should equal height={height})");
 
         tiles
     }
@@ -124,24 +106,24 @@ impl Storage for VTile {
 
 impl CompositeBase for VTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        // Compute layout if needed: recompute whenever the child count
-        // changed OR the available height differs from whatever height the
-        // cache holds (not just when the cache looks freshly-zeroed --
-        // that alone missed every resize to a different nonzero height).
+        // Recomputed on every call rather than cached keyed on the
+        // container's own outer height: a child's `limits()` can change
+        // without the container's height changing at all (e.g. `Splitter`
+        // dragging calls `CodeEditor::set_height` on a sibling), and a
+        // cache keyed only on outer height has no way to notice that --
+        // the previous version of this cache went stale exactly that way,
+        // silently freezing the layout the first time something like that
+        // happened. Cheap in practice: children counts here are small
+        // (a handful), so this is O(children) per call, not a hot path
+        // worth a fragile cache for.
         let count = self.inner.len();
-        let height = ctx.bounds.height();
-        {
-            let mut tiles = self.tiles.write().unwrap();
-            let needs_compute =
-                tiles.len() != count + 1 || *self.cached_height.read().unwrap() != height;
-            if needs_compute && count > 0 {
-                let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
-                *tiles = self.compute_layout(&basic_ctx, height);
-                *self.cached_height.write().unwrap() = height;
-            }
+        if count == 0 {
+            return Rect::zero();
         }
+        let height = ctx.bounds.height();
+        let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
+        let tiles = self.compute_layout(&basic_ctx, height);
 
-        let tiles = self.tiles.read().unwrap();
         if index >= tiles.len().saturating_sub(1) {
             return Rect::zero();
         }
@@ -379,10 +361,6 @@ impl Element for VTile {
 /// Horizontal tile element - arranges children horizontally.
 pub struct HTile {
     inner: Composite,
-    tiles: RwLock<Vec<f32>>,
-    /// The width `tiles` was last computed for; see `VTile::cached_height`
-    /// for why this replaced the old "last entry is 0.0" staleness check.
-    cached_width: RwLock<f32>,
     /// Index of the child currently capturing mouse drag events, if any.
     drag_capture: RwLock<Option<usize>>,
 }
@@ -392,19 +370,14 @@ impl HTile {
     pub fn new() -> Self {
         Self {
             inner: Composite::new(),
-            tiles: RwLock::new(Vec::new()),
-            cached_width: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
 
     /// Creates a horizontal tile from a vector of elements.
     pub fn from_vec(children: Vec<ElementPtr>) -> Self {
-        let len = children.len();
         Self {
             inner: Composite::from_vec(children),
-            tiles: RwLock::new(vec![0.0; len + 1]),
-            cached_width: RwLock::new(-1.0),
             drag_capture: RwLock::new(None),
         }
     }
@@ -412,8 +385,6 @@ impl HTile {
     /// Adds an element.
     pub fn push(&mut self, element: ElementPtr) {
         self.inner.push(element);
-        self.tiles.write().unwrap().push(0.0);
-        *self.cached_width.get_mut().unwrap() = -1.0;
     }
 
     fn compute_layout(&self, ctx: &BasicContext, width: f32) -> Vec<f32> {
@@ -480,22 +451,18 @@ impl Storage for HTile {
 
 impl CompositeBase for HTile {
     fn bounds_of(&self, ctx: &Context, index: usize) -> Rect {
-        // See VTile::bounds_of for why this compares against the cached
-        // width rather than checking for a zeroed last entry.
+        // Recomputed on every call -- see `VTile::bounds_of`'s comment for
+        // why a cache keyed only on the container's own outer width can't
+        // notice a child's `limits()` changing on its own (e.g. a
+        // `Splitter` calling `TreeView::set_width` on a sibling).
         let count = self.inner.len();
-        let width = ctx.bounds.width();
-        {
-            let mut tiles = self.tiles.write().unwrap();
-            let needs_compute =
-                tiles.len() != count + 1 || *self.cached_width.read().unwrap() != width;
-            if needs_compute && count > 0 {
-                let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
-                *tiles = self.compute_layout(&basic_ctx, width);
-                *self.cached_width.write().unwrap() = width;
-            }
+        if count == 0 {
+            return Rect::zero();
         }
+        let width = ctx.bounds.width();
+        let basic_ctx = BasicContext::new(ctx.view, ctx.canvas);
+        let tiles = self.compute_layout(&basic_ctx, width);
 
-        let tiles = self.tiles.read().unwrap();
         if index >= tiles.len().saturating_sub(1) {
             return Rect::zero();
         }
@@ -760,4 +727,102 @@ macro_rules! htile {
         )*
         tile
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::element::{share, ViewStretch};
+    use crate::support::canvas::Canvas;
+
+    /// An element whose reported min-size can be changed at runtime via
+    /// `&self` (mirroring `CodeEditor::set_height`/`TreeView::set_width`),
+    /// used to reproduce a bug where `VTile`/`HTile::bounds_of` cached
+    /// layout keyed only on the *container's* own outer size -- so a
+    /// child's own `limits()` changing on its own (exactly what dragging a
+    /// `Splitter` does to a sibling) was invisible to the cache and never
+    /// took effect.
+    struct Resizable {
+        min: RwLock<Point>,
+        stretch: ViewStretch,
+    }
+    impl Element for Resizable {
+        fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
+            let min = *self.min.read().unwrap();
+            ViewLimits::min_size(min.x, min.y)
+        }
+        fn stretch(&self) -> ViewStretch {
+            self.stretch
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn vtile_bounds_of_reflects_a_childs_min_size_change_without_a_resize() {
+        let a = share(Resizable {
+            min: RwLock::new(Point::new(100.0, 90.0)),
+            stretch: ViewStretch::new(0.0, 0.0),
+        });
+        let b = share(Resizable {
+            min: RwLock::new(Point::new(100.0, 90.0)),
+            stretch: ViewStretch::new(0.0, 0.0),
+        });
+        let vtile = VTile::from_vec(vec![a.clone(), b.clone()]);
+
+        let view = crate::view::View::new(crate::support::point::Extent::new(200.0, 400.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(200, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 200.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let before = vtile.bounds_of(&ctx, 1);
+        assert_eq!(before.top, 90.0, "second child should start right after the first's 90pt height");
+
+        // Same window/container height as before -- only the first
+        // child's own min-height changed, the way `Splitter::on_drag`
+        // calling `CodeEditor::set_height` does to a sibling.
+        *a.as_any().downcast_ref::<Resizable>().unwrap().min.write().unwrap() = Point::new(100.0, 200.0);
+
+        let after = vtile.bounds_of(&ctx, 1);
+        assert_eq!(
+            after.top, 200.0,
+            "second child's position should follow the first child's new height on the very next call, \
+             not stay frozen at the old layout"
+        );
+    }
+
+    #[test]
+    fn htile_bounds_of_reflects_a_childs_min_size_change_without_a_resize() {
+        let a = share(Resizable {
+            min: RwLock::new(Point::new(240.0, 400.0)),
+            stretch: ViewStretch::new(0.0, 0.0),
+        });
+        let b = share(Resizable {
+            min: RwLock::new(Point::new(100.0, 400.0)),
+            stretch: ViewStretch::new(0.0, 0.0),
+        });
+        let htile = HTile::from_vec(vec![a.clone(), b.clone()]);
+
+        let view = crate::view::View::new(crate::support::point::Extent::new(900.0, 400.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(900, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 900.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let before = htile.bounds_of(&ctx, 1);
+        assert_eq!(before.left, 240.0);
+
+        *a.as_any().downcast_ref::<Resizable>().unwrap().min.write().unwrap() = Point::new(300.0, 400.0);
+
+        let after = htile.bounds_of(&ctx, 1);
+        assert_eq!(
+            after.left, 300.0,
+            "second child's position should follow the first (sidebar-like) child's new width \
+             immediately, matching what a Splitter drag needs"
+        );
+    }
+
 }

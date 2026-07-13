@@ -6,6 +6,8 @@
 #![cfg(target_os = "macos")]
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use block2::RcBlock;
 use core::ptr::NonNull;
@@ -19,9 +21,10 @@ use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSAutoresizingMaskOptions, NSBackingStoreType, NSCursor, NSEvent, NSGraphicsContext, NSMenu,
-    NSMenuItem, NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
+    NSMenuItem, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSSavePanel, NSView, NSWindow,
+    NSWindowDelegate, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_foundation::{MainThreadMarker, NSNotification, NSPoint, NSRect, NSSize, NSString, NSTimer};
 
 use super::{CloseBehavior, Window};
 
@@ -211,6 +214,69 @@ pub fn set_clipboard(_text: &str) {
     }
 }
 
+/// Shows a native "choose a folder" panel (e.g. Open Project), optionally
+/// starting in `initial_dir` (a sensible default the user can still
+/// navigate away from, not a substitute for actually asking them). Blocks
+/// the caller until the user picks a folder or cancels -- `runModal` pumps
+/// its own modal run loop, which is the normal, expected way a native panel
+/// works (every other Mac app blocks the same way), not a bug.
+pub fn choose_folder(title: &str, initial_dir: Option<&std::path::Path>) -> Option<PathBuf> {
+    let mtm = MainThreadMarker::new()?;
+    unsafe {
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseDirectories(true);
+        panel.setCanChooseFiles(false);
+        panel.setAllowsMultipleSelection(false);
+        panel.setTitle(Some(&NSString::from_str(title)));
+        if let Some(dir) = initial_dir {
+            let dir_str = NSString::from_str(&dir.display().to_string());
+            panel.setDirectoryURL(Some(&objc2_foundation::NSURL::fileURLWithPath(&dir_str)));
+        }
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        let urls = panel.URLs();
+        url_to_path(urls.iter().next()?)
+    }
+}
+
+/// Shows a native "open a file" panel, optionally restricted to the given
+/// extensions (e.g. `&["rs"]`; empty allows any file).
+pub fn choose_file_to_open(title: &str) -> Option<PathBuf> {
+    let mtm = MainThreadMarker::new()?;
+    unsafe {
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseDirectories(false);
+        panel.setCanChooseFiles(true);
+        panel.setAllowsMultipleSelection(false);
+        panel.setTitle(Some(&NSString::from_str(title)));
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        let urls = panel.URLs();
+        url_to_path(urls.iter().next()?)
+    }
+}
+
+/// Shows a native "save as" panel, pre-filled with `default_name`.
+pub fn choose_file_to_save(title: &str, default_name: &str) -> Option<PathBuf> {
+    let mtm = MainThreadMarker::new()?;
+    unsafe {
+        let panel = NSSavePanel::savePanel(mtm);
+        panel.setTitle(Some(&NSString::from_str(title)));
+        panel.setNameFieldStringValue(&NSString::from_str(default_name));
+        if panel.runModal() != NSModalResponseOK {
+            return None;
+        }
+        let url = panel.URL()?;
+        url_to_path(&url)
+    }
+}
+
+unsafe fn url_to_path(url: &objc2_foundation::NSURL) -> Option<PathBuf> {
+    Some(PathBuf::from(url.path()?.to_string()))
+}
+
 /// macOS application wrapper.
 pub struct MacOSApp {
     app: Retained<NSApplication>,
@@ -223,6 +289,10 @@ pub struct MacOSApp {
     // `applicationShouldHandleReopen:hasVisibleWindows:` call would land on
     // a dangling reference.
     delegate: RefCell<Option<Retained<MKAppDelegate>>>,
+    // One `MenuActionTarget` per native menu item with an `on_select`
+    // callback -- see that type's doc comment for why these must be kept
+    // alive here rather than just handed to `setTarget` and forgotten.
+    menu_action_targets: RefCell<Vec<Retained<MenuActionTarget>>>,
 }
 
 impl MacOSApp {
@@ -237,6 +307,7 @@ impl MacOSApp {
             app,
             mtm,
             delegate: RefCell::new(None),
+            menu_action_targets: RefCell::new(Vec::new()),
         };
         macos_app.setup_menu();
 
@@ -270,6 +341,16 @@ impl MacOSApp {
     /// it, since the run loop keeps its own separate strong reference once
     /// scheduled -- that's exactly why the wrapper's `Drop` explicitly
     /// calls `invalidate()` rather than relying on refcounting.
+    ///
+    /// Every firing marks every open window's content view dirty
+    /// afterward, regardless of whether the callback actually changed
+    /// anything visible (see the redraw comment in this fn's body) --
+    /// cheap for a small window, but a real, measured cost (confirmed via
+    /// `ps` while building this) for a window with expensive content (a
+    /// syntax-highlighting code editor, a large tree view, ...). Pick
+    /// `interval_secs` with that in mind rather than defaulting to
+    /// something very short "to be responsive": MKIDE settled on 0.5s for
+    /// polling build output, which still feels live.
     pub fn schedule_timer(
         &self,
         interval_secs: f64,
@@ -277,8 +358,23 @@ impl MacOSApp {
         callback: impl FnMut() + 'static,
     ) -> Retained<NSTimer> {
         let callback = RefCell::new(callback);
+        let app = self.app.clone();
         let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
             (callback.borrow_mut())();
+
+            // Timer-driven state changes (e.g. MKIDE polling a build task's
+            // output into its log) don't go through any of the mouse/key/
+            // scroll handlers that already call `setNeedsDisplay` after
+            // handling an event -- without this, whatever the callback just
+            // changed just sat there unrendered until some unrelated
+            // interaction (a click, a scroll) incidentally repainted the
+            // window. `NSApplication.windows` already enumerates every live
+            // window, so no separate registry of views is needed here.
+            for window in app.windows().iter() {
+                if let Some(content_view) = window.contentView() {
+                    unsafe { content_view.setNeedsDisplay(true) };
+                }
+            }
         });
         unsafe {
             NSTimer::scheduledTimerWithTimeInterval_repeats_block(interval_secs, repeats, &block)
@@ -291,6 +387,11 @@ impl MacOSApp {
 
         // Check if there's a custom menu bar configuration
         let config = get_native_menu_bar().unwrap_or_default();
+
+        // Dropped only after every old `NSMenuItem` referencing them is
+        // itself replaced by `setMainMenu` below, so no menu item is ever
+        // left pointing at a deallocated target.
+        self.menu_action_targets.borrow_mut().clear();
 
         unsafe {
             let main_menu = NSMenu::new(self.mtm);
@@ -553,14 +654,27 @@ impl MacOSApp {
             .unwrap_or_default();
         let key_str = NSString::from_str(&key_equiv);
 
-        // For items with callbacks, we can't easily map to Objective-C selectors
-        // So for now, items without callbacks will have no action
         let ns_item = NSMenuItem::initWithTitle_action_keyEquivalent(
             self.mtm.alloc(),
             &title,
-            None, // Custom callbacks require more complex setup
+            None,
             &key_str,
         );
+
+        // Wire the Rust `on_select` callback to a real AppKit target/action
+        // -- a menu item with `action == nil` doesn't just silently do
+        // nothing when clicked, `NSMenu`'s automatic item validation greys
+        // it out entirely (an item AppKit can't validate/perform is
+        // treated as unavailable), which is exactly what "buttons in the
+        // Build menu are inactive" turned out to be. `target` is an
+        // unretained reference by AppKit convention, hence keeping the
+        // `MenuActionTarget` alive separately in `menu_action_targets`.
+        if let Some(ref callback) = item.action {
+            let target = MenuActionTarget::new(self.mtm, callback.clone());
+            ns_item.setTarget(Some(&target));
+            ns_item.setAction(Some(objc2::sel!(performMenuAction:)));
+            self.menu_action_targets.borrow_mut().push(target);
+        }
 
         // Set modifier mask if there's a shortcut
         if let Some(ref shortcut) = item.shortcut {
@@ -674,6 +788,84 @@ impl MKAppDelegate {
             rebuild: RefCell::new(rebuild),
             current_window: RefCell::new(None),
         });
+        unsafe { msg_send_id![super(this), init] }
+    }
+}
+
+/// `NSMenuItem.target` is an unretained (`weak`-equivalent) reference by
+/// AppKit convention -- exactly the same reason `MacOSApp::delegate` above
+/// holds `MKAppDelegate` itself. One of these exists per menu item that has
+/// a Rust `on_select`/`action` callback; `MacOSApp::menu_action_targets`
+/// keeps them alive for as long as the menu itself exists.
+struct MenuActionTargetIvars {
+    callback: Arc<dyn Fn() + Send + Sync>,
+}
+
+declare_class!(
+    struct MenuActionTarget;
+
+    unsafe impl ClassType for MenuActionTarget {
+        type Super = NSObject;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "MKMenuActionTarget";
+    }
+
+    impl DeclaredClass for MenuActionTarget {
+        type Ivars = MenuActionTargetIvars;
+    }
+
+    unsafe impl NSObjectProtocol for MenuActionTarget {}
+
+    unsafe impl MenuActionTarget {
+        #[method(performMenuAction:)]
+        fn perform_menu_action(&self, _sender: &NSObject) {
+            (self.ivars().callback)();
+        }
+    }
+);
+
+impl MenuActionTarget {
+    fn new(mtm: MainThreadMarker, callback: Arc<dyn Fn() + Send + Sync>) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(MenuActionTargetIvars { callback });
+        unsafe { msg_send_id![super(this), init] }
+    }
+}
+
+/// Backs [`MacOSWindow::on_focus`]. A plain `Box<dyn Fn()>` (not `Arc<dyn
+/// Fn() + Send + Sync>` like `MenuActionTarget`'s callback) since a
+/// window's focus callback is never shared across multiple native objects
+/// the way one `on_select` callback can be reused for several menu items --
+/// each window gets exactly one delegate.
+struct WindowFocusDelegateIvars {
+    callback: Box<dyn Fn()>,
+}
+
+declare_class!(
+    struct WindowFocusDelegate;
+
+    unsafe impl ClassType for WindowFocusDelegate {
+        type Super = NSObject;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "MKWindowFocusDelegate";
+    }
+
+    impl DeclaredClass for WindowFocusDelegate {
+        type Ivars = WindowFocusDelegateIvars;
+    }
+
+    unsafe impl NSObjectProtocol for WindowFocusDelegate {}
+
+    unsafe impl NSWindowDelegate for WindowFocusDelegate {
+        #[method(windowDidBecomeKey:)]
+        fn window_did_become_key(&self, _notification: &NSNotification) {
+            (self.ivars().callback)();
+        }
+    }
+);
+
+impl WindowFocusDelegate {
+    fn new(mtm: MainThreadMarker, callback: Box<dyn Fn()>) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(WindowFocusDelegateIvars { callback });
         unsafe { msg_send_id![super(this), init] }
     }
 }
@@ -1177,17 +1369,48 @@ pub struct MacOSWindow {
     window: Retained<NSWindow>,
     mk_view: Retained<MKView>,
     view: Option<View>,
+    // `NSWindow.delegate` is unretained by AppKit convention (same
+    // reasoning as `MacOSApp::delegate`/`menu_action_targets`), so nothing
+    // else keeps this alive once `on_focus` sets it.
+    focus_delegate: RefCell<Option<Retained<WindowFocusDelegate>>>,
 }
 
 impl MacOSWindow {
-    /// Creates a new macOS window.
+    /// Creates a new macOS window with the default style (closable,
+    /// miniaturizable, resizable).
     pub fn new(title: &str, size: Extent, mtm: MainThreadMarker) -> Self {
+        Self::new_with_style(title, size, super::WindowStyle::default(), mtm)
+    }
+
+    /// Creates a new macOS window honoring `style`'s flags -- `Window::new`
+    /// (via `MacOSWindow::new` above) always used a hardcoded style mask
+    /// regardless of what a `WindowBuilder` was configured with, so e.g.
+    /// `.style(WindowStyle { resizable: false, .. })` silently had no
+    /// effect on macOS; this is what `Window::new_with_options` now calls
+    /// instead so that configuration actually applies.
+    pub fn new_with_style(
+        title: &str,
+        size: Extent,
+        style: super::WindowStyle,
+        mtm: MainThreadMarker,
+    ) -> Self {
         let frame = NSRect::new(NSPoint::new(0.0, 0.0), extent_to_ns_size(size));
 
-        let style = NSWindowStyleMask::Titled
-            | NSWindowStyleMask::Closable
-            | NSWindowStyleMask::Miniaturizable
-            | NSWindowStyleMask::Resizable;
+        let style = if style.borderless {
+            NSWindowStyleMask::Borderless
+        } else {
+            let mut mask = NSWindowStyleMask::Titled;
+            if style.closable {
+                mask |= NSWindowStyleMask::Closable;
+            }
+            if style.miniaturizable {
+                mask |= NSWindowStyleMask::Miniaturizable;
+            }
+            if style.resizable {
+                mask |= NSWindowStyleMask::Resizable;
+            }
+            mask
+        };
 
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -1228,7 +1451,24 @@ impl MacOSWindow {
             window,
             mk_view,
             view: Some(View::new(size)),
+            focus_delegate: RefCell::new(None),
         }
+    }
+
+    /// Calls `callback` whenever this window becomes the key (frontmost,
+    /// receiving-input) window -- e.g. MKIDE uses this so its native menu
+    /// bar's Save/Build/Run/Test/Debug commands act on whichever open
+    /// project's window is currently focused, the same way switching
+    /// windows in any multi-window Mac app changes what the menu bar's
+    /// commands apply to.
+    pub fn on_focus(&self, callback: impl Fn() + 'static) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let delegate = WindowFocusDelegate::new(mtm, Box::new(callback));
+        self.window
+            .setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        *self.focus_delegate.borrow_mut() = Some(delegate);
     }
 
     /// Shows the window.
