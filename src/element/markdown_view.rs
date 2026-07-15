@@ -135,7 +135,10 @@ impl MarkdownView {
         canvas.font_size(self.font_size);
         let line_height = self.line_height();
 
-        let origin = Point::new(ctx.bounds.left + self.padding, ctx.bounds.top + self.padding - scroll + self.font_size * 0.85);
+        let origin = Point::new(
+            ctx.bounds.left + self.padding,
+            ctx.bounds.top + self.padding - scroll + self.font_size * 0.85,
+        );
         markdown::draw_runs(&mut canvas, lines, origin, line_height, self.text_color);
     }
 
@@ -239,7 +242,9 @@ impl Element for MarkdownView {
         }
 
         let mut scroll = self.scroll_offset.write().unwrap();
-        *scroll = (*scroll - dir.y * 20.0).min(total_height - visible_height).max(0.0);
+        *scroll = (*scroll - dir.y * 20.0)
+            .min(total_height - visible_height)
+            .max(0.0);
 
         true
     }
@@ -306,7 +311,12 @@ mod tests {
     #[test]
     fn set_text_does_not_reset_scroll() {
         let view = MarkdownView::new().width(200.0).height(80.0);
-        view.set_text((0..40).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n\n"));
+        view.set_text(
+            (0..40)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        );
         let (v, canvas, bounds) = ctx_owned(200.0, 80.0);
         let ctx = Context::new(&v, &canvas, bounds);
         view.layout(&ctx);
@@ -315,8 +325,14 @@ mod tests {
         let scrolled = *view.scroll_offset.read().unwrap();
         assert!(scrolled > 0.0, "expected scroll to have moved");
 
-        view.set_text("same-length replacement content that also spans several lines\n\nmore\n\nmore\n\nmore");
-        assert_eq!(*view.scroll_offset.read().unwrap(), scrolled, "set_text shouldn't reset scroll");
+        view.set_text(
+            "same-length replacement content that also spans several lines\n\nmore\n\nmore\n\nmore",
+        );
+        assert_eq!(
+            *view.scroll_offset.read().unwrap(),
+            scrolled,
+            "set_text shouldn't reset scroll"
+        );
     }
 
     #[test]
@@ -333,7 +349,10 @@ mod tests {
 
     #[test]
     fn handle_scroll_clamps_into_a_valid_range_when_content_overflows() {
-        let text = (0..40).map(|i| format!("paragraph number {i}")).collect::<Vec<_>>().join("\n\n");
+        let text = (0..40)
+            .map(|i| format!("paragraph number {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let view = MarkdownView::new().width(200.0).height(80.0).text(text);
 
         let (v, canvas, bounds) = ctx_owned(200.0, 80.0);

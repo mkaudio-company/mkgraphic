@@ -41,7 +41,11 @@ pub struct StyledRun {
 /// each run's width in its own font) when sizing a bubble, without
 /// duplicating the bold/italic/monospace-to-`Font` logic.
 pub(crate) fn run_font(run: &StyledRun) -> Font {
-    let mut font = if run.monospace { Font::monospace() } else { Font::sans_serif() };
+    let mut font = if run.monospace {
+        Font::monospace()
+    } else {
+        Font::sans_serif()
+    };
     if run.bold {
         font = font.bold();
     }
@@ -62,25 +66,44 @@ pub fn markdown_to_runs(source: &str) -> Vec<Vec<StyledRun>> {
     let mut italic_depth = 0usize;
     let mut code_depth = 0usize;
 
-    let push_text = |lines: &mut Vec<Vec<StyledRun>>, text: &str, bold: bool, italic: bool, monospace: bool| {
-        let mut parts = text.split('\n');
-        if let Some(first) = parts.next() {
-            if !first.is_empty() {
-                lines.last_mut().unwrap().push(StyledRun { text: first.to_string(), bold, italic, monospace });
+    let push_text =
+        |lines: &mut Vec<Vec<StyledRun>>, text: &str, bold: bool, italic: bool, monospace: bool| {
+            let mut parts = text.split('\n');
+            if let Some(first) = parts.next() {
+                if !first.is_empty() {
+                    lines.last_mut().unwrap().push(StyledRun {
+                        text: first.to_string(),
+                        bold,
+                        italic,
+                        monospace,
+                    });
+                }
             }
-        }
-        for part in parts {
-            lines.push(Vec::new());
-            if !part.is_empty() {
-                lines.last_mut().unwrap().push(StyledRun { text: part.to_string(), bold, italic, monospace });
+            for part in parts {
+                lines.push(Vec::new());
+                if !part.is_empty() {
+                    lines.last_mut().unwrap().push(StyledRun {
+                        text: part.to_string(),
+                        bold,
+                        italic,
+                        monospace,
+                    });
+                }
             }
-        }
-    };
+        };
 
     for event in Parser::new(source) {
         match event {
-            Event::Text(text) => push_text(&mut lines, &text, bold_depth > 0, italic_depth > 0, code_depth > 0),
-            Event::Code(text) => push_text(&mut lines, &text, bold_depth > 0, italic_depth > 0, true),
+            Event::Text(text) => push_text(
+                &mut lines,
+                &text,
+                bold_depth > 0,
+                italic_depth > 0,
+                code_depth > 0,
+            ),
+            Event::Code(text) => {
+                push_text(&mut lines, &text, bold_depth > 0, italic_depth > 0, true)
+            }
             Event::Start(Tag::Strong) => bold_depth += 1,
             Event::End(TagEnd::Strong) => bold_depth = bold_depth.saturating_sub(1),
             Event::Start(Tag::Emphasis) => italic_depth += 1,
@@ -105,7 +128,13 @@ pub fn markdown_to_runs(source: &str) -> Vec<Vec<StyledRun>> {
             }
             Event::End(TagEnd::Item) => lines.push(Vec::new()),
             Event::End(TagEnd::Paragraph) => lines.push(Vec::new()),
-            Event::SoftBreak => push_text(&mut lines, " ", bold_depth > 0, italic_depth > 0, code_depth > 0),
+            Event::SoftBreak => push_text(
+                &mut lines,
+                " ",
+                bold_depth > 0,
+                italic_depth > 0,
+                code_depth > 0,
+            ),
             Event::HardBreak => lines.push(Vec::new()),
             _ => {}
         }
@@ -123,7 +152,11 @@ pub fn markdown_to_runs(source: &str) -> Vec<Vec<StyledRun>> {
 /// measured in its own font (summing per-word widths rather than
 /// measuring one concatenated string, since different runs on the same
 /// display line can be different fonts).
-pub fn wrap_runs(canvas: &mut Canvas, lines: &[Vec<StyledRun>], max_width: f32) -> Vec<Vec<StyledRun>> {
+pub fn wrap_runs(
+    canvas: &mut Canvas,
+    lines: &[Vec<StyledRun>],
+    max_width: f32,
+) -> Vec<Vec<StyledRun>> {
     let mut out = Vec::new();
 
     for line in lines {
@@ -138,7 +171,11 @@ pub fn wrap_runs(canvas: &mut Canvas, lines: &[Vec<StyledRun>], max_width: f32) 
         for run in line {
             canvas.font(run_font(run));
             for (word_index, word) in run.text.split(' ').enumerate() {
-                let piece = if word_index > 0 { format!(" {word}") } else { word.to_string() };
+                let piece = if word_index > 0 {
+                    format!(" {word}")
+                } else {
+                    word.to_string()
+                };
                 if piece.is_empty() {
                     continue;
                 }
@@ -167,19 +204,33 @@ fn append_run(current: &mut Vec<StyledRun>, text: String, style: &StyledRun) {
         return;
     }
     if let Some(last) = current.last_mut() {
-        if last.bold == style.bold && last.italic == style.italic && last.monospace == style.monospace {
+        if last.bold == style.bold
+            && last.italic == style.italic
+            && last.monospace == style.monospace
+        {
             last.text.push_str(&text);
             return;
         }
     }
-    current.push(StyledRun { text, bold: style.bold, italic: style.italic, monospace: style.monospace });
+    current.push(StyledRun {
+        text,
+        bold: style.bold,
+        italic: style.italic,
+        monospace: style.monospace,
+    });
 }
 
 /// Draws already-wrapped run-lines starting at `origin`, switching font
 /// and advancing `x` per run. `color` is the default fill for every run
 /// -- this renderer doesn't vary color per Markdown construct (no syntax
 /// highlighting inside chat text), only weight/style/family.
-pub fn draw_runs(canvas: &mut Canvas, lines: &[Vec<StyledRun>], origin: Point, line_height: f32, color: Color) {
+pub fn draw_runs(
+    canvas: &mut Canvas,
+    lines: &[Vec<StyledRun>],
+    origin: Point,
+    line_height: f32,
+    color: Color,
+) {
     canvas.fill_style(color);
     let mut y = origin.y;
     for line in lines {
@@ -201,7 +252,15 @@ mod tests {
     fn plain_text_is_a_single_unstyled_run() {
         let lines = markdown_to_runs("hello world");
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], vec![StyledRun { text: "hello world".to_string(), bold: false, italic: false, monospace: false }]);
+        assert_eq!(
+            lines[0],
+            vec![StyledRun {
+                text: "hello world".to_string(),
+                bold: false,
+                italic: false,
+                monospace: false
+            }]
+        );
     }
 
     #[test]
@@ -211,11 +270,36 @@ mod tests {
         assert_eq!(
             lines[0],
             vec![
-                StyledRun { text: "bold".to_string(), bold: true, italic: false, monospace: false },
-                StyledRun { text: " and ".to_string(), bold: false, italic: false, monospace: false },
-                StyledRun { text: "italic".to_string(), bold: false, italic: true, monospace: false },
-                StyledRun { text: " and ".to_string(), bold: false, italic: false, monospace: false },
-                StyledRun { text: "code".to_string(), bold: false, italic: false, monospace: true },
+                StyledRun {
+                    text: "bold".to_string(),
+                    bold: true,
+                    italic: false,
+                    monospace: false
+                },
+                StyledRun {
+                    text: " and ".to_string(),
+                    bold: false,
+                    italic: false,
+                    monospace: false
+                },
+                StyledRun {
+                    text: "italic".to_string(),
+                    bold: false,
+                    italic: true,
+                    monospace: false
+                },
+                StyledRun {
+                    text: " and ".to_string(),
+                    bold: false,
+                    italic: false,
+                    monospace: false
+                },
+                StyledRun {
+                    text: "code".to_string(),
+                    bold: false,
+                    italic: false,
+                    monospace: true
+                },
             ]
         );
     }
@@ -223,11 +307,20 @@ mod tests {
     #[test]
     fn a_code_block_preserves_its_text_without_treating_markdown_syntax_inside_it_specially() {
         let lines = markdown_to_runs("```\nlet x = **not bold**;\n```");
-        let code_text: String =
-            lines.iter().flat_map(|line| line.iter().map(|r| r.text.as_str())).collect::<Vec<_>>().join("\n");
-        assert!(code_text.contains("let x = **not bold**;"), "code block text was mangled: {code_text:?}");
+        let code_text: String = lines
+            .iter()
+            .flat_map(|line| line.iter().map(|r| r.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            lines.iter().flatten().all(|r| r.monospace || r.text.trim().is_empty()),
+            code_text.contains("let x = **not bold**;"),
+            "code block text was mangled: {code_text:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .flatten()
+                .all(|r| r.monospace || r.text.trim().is_empty()),
             "expected every non-empty run inside the code block to be monospace"
         );
     }
@@ -235,34 +328,52 @@ mod tests {
     #[test]
     fn a_bullet_list_prefixes_each_item_with_a_bullet_on_its_own_line() {
         let lines = markdown_to_runs("- first\n- second");
-        let rendered: Vec<String> =
-            lines.iter().map(|line| line.iter().map(|r| r.text.as_str()).collect::<String>()).collect();
-        assert!(rendered.contains(&"\u{2022} first".to_string()), "rendered lines: {rendered:?}");
-        assert!(rendered.contains(&"\u{2022} second".to_string()), "rendered lines: {rendered:?}");
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|r| r.text.as_str()).collect::<String>())
+            .collect();
+        assert!(
+            rendered.contains(&"\u{2022} first".to_string()),
+            "rendered lines: {rendered:?}"
+        );
+        assert!(
+            rendered.contains(&"\u{2022} second".to_string()),
+            "rendered lines: {rendered:?}"
+        );
     }
 
     #[test]
     fn a_heading_is_rendered_bold() {
         let lines = markdown_to_runs("# Title");
         let bold_run = lines.iter().flatten().find(|r| r.text.contains("Title"));
-        assert!(bold_run.is_some_and(|r| r.bold), "expected the heading text to be a bold run");
+        assert!(
+            bold_run.is_some_and(|r| r.bold),
+            "expected the heading text to be a bold run"
+        );
     }
 
     #[test]
     fn wrap_runs_keeps_every_line_within_max_width() {
         let mut canvas = Canvas::new(400, 400).unwrap();
-        let lines = markdown_to_runs("the quick brown **fox** jumps over the lazy dog again and again");
+        let lines =
+            markdown_to_runs("the quick brown **fox** jumps over the lazy dog again and again");
 
         let wrapped = wrap_runs(&mut canvas, &lines, 100.0);
 
-        assert!(wrapped.len() > 1, "expected wrapping to produce multiple lines");
+        assert!(
+            wrapped.len() > 1,
+            "expected wrapping to produce multiple lines"
+        );
         for line in &wrapped {
             let mut width = 0.0f32;
             for run in line {
                 canvas.font(run_font(run));
                 width += canvas.text_width(&run.text);
             }
-            assert!(width <= 101.0, "line {line:?} exceeds the 100px max width ({width})");
+            assert!(
+                width <= 101.0,
+                "line {line:?} exceeds the 100px max width ({width})"
+            );
         }
     }
 }

@@ -58,7 +58,11 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(sender: ChatSender, text: impl Into<String>) -> Self {
-        Self { sender, thinking: String::new(), response: text.into() }
+        Self {
+            sender,
+            thinking: String::new(),
+            response: text.into(),
+        }
     }
 }
 
@@ -139,7 +143,10 @@ impl ChatHistory {
     /// measurement pass against the current width) is resolved the next
     /// time `layout_messages` runs -- see its own doc comment.
     pub fn push_message(&self, sender: ChatSender, text: impl Into<String>) {
-        self.messages.write().unwrap().push(ChatMessage::new(sender, text));
+        self.messages
+            .write()
+            .unwrap()
+            .push(ChatMessage::new(sender, text));
         *self.scroll_offset.write().unwrap() = f32::MAX;
     }
 
@@ -151,7 +158,10 @@ impl ChatHistory {
     /// [`append_thinking`]: Self::append_thinking
     /// [`append_response`]: Self::append_response
     pub fn start_streaming_message(&self, sender: ChatSender) {
-        self.messages.write().unwrap().push(ChatMessage::new(sender, ""));
+        self.messages
+            .write()
+            .unwrap()
+            .push(ChatMessage::new(sender, ""));
         *self.scroll_offset.write().unwrap() = f32::MAX;
     }
 
@@ -195,7 +205,12 @@ impl ChatHistory {
     /// before its first chunk has arrived, or a message with no thinking
     /// at all) -- callers skip an empty section entirely rather than
     /// drawing a lone blank line for it.
-    fn wrap_markdown(canvas: &mut Canvas, text: &str, max_width: f32, force_italic: bool) -> Option<Vec<Vec<StyledRun>>> {
+    fn wrap_markdown(
+        canvas: &mut Canvas,
+        text: &str,
+        max_width: f32,
+        force_italic: bool,
+    ) -> Option<Vec<Vec<StyledRun>>> {
         if text.is_empty() {
             return None;
         }
@@ -255,22 +270,29 @@ impl ChatHistory {
                 // draw_messages then just draws whatever's in
                 // `thinking_lines` uniformly, no special-cased label draw.
                 let thinking_lines =
-                    Self::wrap_markdown(&mut canvas, &msg.thinking, max_text_width, true).map(|mut lines| {
-                        lines.insert(
-                            0,
-                            vec![StyledRun {
-                                text: "Thinking".to_string(),
-                                bold: false,
-                                italic: true,
-                                monospace: false,
-                            }],
-                        );
-                        lines
-                    });
-                let response_lines = Self::wrap_markdown(&mut canvas, &msg.response, max_text_width, false);
+                    Self::wrap_markdown(&mut canvas, &msg.thinking, max_text_width, true).map(
+                        |mut lines| {
+                            lines.insert(
+                                0,
+                                vec![StyledRun {
+                                    text: "Thinking".to_string(),
+                                    bold: false,
+                                    italic: true,
+                                    monospace: false,
+                                }],
+                            );
+                            lines
+                        },
+                    );
+                let response_lines =
+                    Self::wrap_markdown(&mut canvas, &msg.response, max_text_width, false);
 
-                let thinking_height = thinking_lines.as_ref().map_or(0.0, |l| l.len() as f32 * line_height);
-                let response_height = response_lines.as_ref().map_or(0.0, |l| l.len() as f32 * line_height);
+                let thinking_height = thinking_lines
+                    .as_ref()
+                    .map_or(0.0, |l| l.len() as f32 * line_height);
+                let response_height = response_lines
+                    .as_ref()
+                    .map_or(0.0, |l| l.len() as f32 * line_height);
                 let section_gap = if thinking_lines.is_some() && response_lines.is_some() {
                     self.gap * 0.5
                 } else {
@@ -289,9 +311,13 @@ impl ChatHistory {
                         let natural_width = Self::measure_lines_width(&mut canvas, &thinking_lines)
                             .max(Self::measure_lines_width(&mut canvas, &response_lines))
                             + 2.0 * self.bubble_padding;
-                        let bubble_width = natural_width.min(self.width * self.bubble_max_width_ratio);
+                        let bubble_width =
+                            natural_width.min(self.width * self.bubble_max_width_ratio);
                         let (left, right) = if msg.sender == ChatSender::User {
-                            (self.width - self.padding - bubble_width, self.width - self.padding)
+                            (
+                                self.width - self.padding - bubble_width,
+                                self.width - self.padding,
+                            )
                         } else {
                             (self.padding, self.padding + bubble_width)
                         };
@@ -300,7 +326,12 @@ impl ChatHistory {
                 };
 
                 y = bubble.bottom + self.gap;
-                out.push(LaidOutMessage { sender: msg.sender, thinking_lines, response_lines, bubble });
+                out.push(LaidOutMessage {
+                    sender: msg.sender,
+                    thinking_lines,
+                    response_lines,
+                    bubble,
+                });
             }
         }
 
@@ -322,7 +353,10 @@ impl ChatHistory {
         let dy = ctx.bounds.top - scroll;
         let out = out
             .into_iter()
-            .map(|m| LaidOutMessage { bubble: m.bubble.translate(dx, dy), ..m })
+            .map(|m| LaidOutMessage {
+                bubble: m.bubble.translate(dx, dy),
+                ..m
+            })
             .collect();
 
         (out, total_height)
@@ -514,7 +548,9 @@ impl Element for ChatHistory {
         }
 
         let mut scroll = self.scroll_offset.write().unwrap();
-        *scroll = (*scroll - dir.y * 20.0).min(total_height - visible_height).max(0.0);
+        *scroll = (*scroll - dir.y * 20.0)
+            .min(total_height - visible_height)
+            .max(0.0);
 
         true
     }
@@ -553,9 +589,13 @@ mod tests {
         canvas.font_size(14.0);
         let text = "the quick brown fox jumps over the lazy dog again and again and again";
 
-        let lines = ChatHistory::wrap_markdown(&mut canvas, text, 100.0, false).expect("non-empty text");
+        let lines =
+            ChatHistory::wrap_markdown(&mut canvas, text, 100.0, false).expect("non-empty text");
 
-        assert!(lines.len() > 1, "expected wrapping to produce multiple lines");
+        assert!(
+            lines.len() > 1,
+            "expected wrapping to produce multiple lines"
+        );
         for line in &lines {
             let width: f32 = line
                 .iter()
@@ -564,7 +604,10 @@ mod tests {
                     canvas.text_width(&run.text)
                 })
                 .sum();
-            assert!(width <= 101.0, "line {line:?} exceeds the 100px max width ({width})");
+            assert!(
+                width <= 101.0,
+                "line {line:?} exceeds the 100px max width ({width})"
+            );
         }
     }
 
@@ -578,10 +621,13 @@ mod tests {
         let mut canvas = Canvas::new(400, 400).unwrap();
         canvas.font_size(14.0);
 
-        let lines = ChatHistory::wrap_markdown(&mut canvas, "line1\n\nline2", 1000.0, false).expect("non-empty text");
+        let lines = ChatHistory::wrap_markdown(&mut canvas, "line1\n\nline2", 1000.0, false)
+            .expect("non-empty text");
 
-        let rendered: Vec<String> =
-            lines.iter().map(|line| line.iter().map(|r| r.text.as_str()).collect()).collect();
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|r| r.text.as_str()).collect())
+            .collect();
         assert_eq!(rendered, vec!["line1".to_string(), "line2".to_string()]);
     }
 

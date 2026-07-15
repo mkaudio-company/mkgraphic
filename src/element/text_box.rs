@@ -195,7 +195,11 @@ impl TextBox {
     fn multiline_row_bounds(&self, ctx: &Context, row: usize) -> (f32, f32, f32) {
         let line_height = self.line_height();
         let row_top = ctx.bounds.top + self.padding + row as f32 * line_height;
-        (row_top, row_top + line_height, row_top + self.font_size * 0.85)
+        (
+            row_top,
+            row_top + line_height,
+            row_top + self.font_size * 0.85,
+        )
     }
 
     /// Inserts text at cursor position.
@@ -543,7 +547,8 @@ impl TextBox {
         canvas.fill_style(self.highlight_color);
 
         if !display.contains('\n') {
-            let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
+            let x1 =
+                ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
             let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, end);
             let sel_rect = Rect::new(x1, ctx.bounds.top + 4.0, x2, ctx.bounds.bottom - 4.0);
             canvas.fill_rect(sel_rect);
@@ -558,10 +563,16 @@ impl TextBox {
             for row in start_row..=end_row {
                 let line = lines.get(row).copied().unwrap_or("");
                 let col_start = if row == start_row { start_col } else { 0 };
-                let col_end = if row == end_row { end_col } else { line.chars().count() };
+                let col_end = if row == end_row {
+                    end_col
+                } else {
+                    line.chars().count()
+                };
 
-                let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_start);
-                let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_end);
+                let x1 =
+                    ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_start);
+                let x2 =
+                    ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_end);
                 let (row_top, row_bottom, _) = self.multiline_row_bounds(ctx, row);
                 canvas.fill_rect(Rect::new(x1, row_top, x2, row_bottom));
             }
@@ -624,7 +635,10 @@ impl Element for TextBox {
     /// matching `stretch`'s `(1.0, 0.0)` -- this is a single-line box,
     /// not vertically resizable.
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::new(Point::new(self.width, self.height), Point::new(super::FULL_EXTENT, self.height))
+        ViewLimits::new(
+            Point::new(self.width, self.height),
+            Point::new(super::FULL_EXTENT, self.height),
+        )
     }
 
     fn stretch(&self) -> ViewStretch {
