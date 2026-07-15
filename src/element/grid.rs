@@ -277,9 +277,14 @@ impl Element for Grid {
                 }
             }
         }
+    }
 
-        // Second pass: overlays (e.g. an expanded dropdown) always draw last
-        // so a later sibling's normal content never paints over them.
+    // Not a second pass embedded in `draw` -- see `tile::VTile::draw_overlay`'s
+    // doc comment for why (same bug, same fix, applies identically here).
+    // Safe to rely on `col_widths` already being populated here: the root
+    // render call always runs `draw()` (which computes it) before
+    // `draw_overlay()` (see `host::macos::render` etc.).
+    fn draw_overlay(&self, ctx: &Context) {
         for i in 0..self.inner.len() {
             if let Some(child) = self.inner.at(i) {
                 let bounds = self.bounds_of(ctx, i);

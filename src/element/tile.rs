@@ -169,9 +169,22 @@ impl Element for VTile {
                 }
             }
         }
+    }
 
-        // Second pass: overlays (e.g. an expanded dropdown) always draw last
-        // so a later sibling's normal content never paints over them.
+    // Not a second pass embedded in `draw` -- that was the bug (see
+    // `mkgraphic::element::Element::draw_overlay`'s own doc comment for the
+    // intent, and this crate's memory for the root-cause writeup): a child
+    // that's itself a container would run its *entire* two-phase cycle,
+    // overlay included, to completion inside this container's own normal-
+    // pass loop, before a *later* sibling here had even drawn its normal
+    // content yet -- so that later sibling's normal paint would land on top
+    // of the earlier child's already-finished overlay. A real, global
+    // two-phase guarantee requires every container's `draw` to do *only*
+    // normal content, and a separate, later `draw_overlay` walk (driven from
+    // the root -- see `host::macos::render`/`windows`/`linux`) to run after
+    // the *entire* tree has finished its normal pass, not just this node's
+    // own children.
+    fn draw_overlay(&self, ctx: &Context) {
         for i in 0..self.inner.len() {
             if let Some(child) = self.inner.at(i) {
                 let bounds = self.bounds_of(ctx, i);
@@ -508,9 +521,12 @@ impl Element for HTile {
                 }
             }
         }
+    }
 
-        // Second pass: overlays (e.g. an expanded dropdown) always draw last
-        // so a later sibling's normal content never paints over them.
+    // See `VTile::draw_overlay`'s doc comment above (same fix, same reason)
+    // for why this is a separate method rather than a second pass embedded
+    // in `draw`.
+    fn draw_overlay(&self, ctx: &Context) {
         for i in 0..self.inner.len() {
             if let Some(child) = self.inner.at(i) {
                 let bounds = self.bounds_of(ctx, i);
@@ -834,6 +850,88 @@ mod tests {
             after.left, 300.0,
             "second child's position should follow the first (sidebar-like) child's new width \
              immediately, matching what a Splitter drag needs"
+        );
+    }
+
+    /// A leaf that just logs which of `draw`/`draw_overlay` was called, in
+    /// order, into a shared log -- for reproducing the exact bug this
+    /// session found and fixed: an overlay (e.g. a `Dropdown`'s expanded
+    /// popup) nested inside its own sub-container used to render *before* a
+    /// later top-level sibling's normal content, because each container's
+    /// `draw` used to run its own embedded "draw all children, then overlay
+    /// all children" cycle to completion -- including any nested container's
+    /// *entire* two-phase cycle -- rather than leaving the overlay pass to a
+    /// single, separate, whole-tree walk driven from the root.
+    struct Recorder {
+        name: &'static str,
+        log: std::sync::Arc<RwLock<Vec<&'static str>>>,
+    }
+    impl Element for Recorder {
+        fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
+            ViewLimits::min_size(50.0, 50.0)
+        }
+        fn draw(&self, _ctx: &Context) {
+            self.log.write().unwrap().push(self.name);
+        }
+        fn draw_overlay(&self, _ctx: &Context) {
+            self.log.write().unwrap().push(self.name);
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn draw_overlay_on_a_nested_child_never_fires_before_a_later_top_level_siblings_draw() {
+        let log: std::sync::Arc<RwLock<Vec<&'static str>>> =
+            std::sync::Arc::new(RwLock::new(Vec::new()));
+
+        // "nested" sits inside an inner HTile (its own sub-container),
+        // which is the first child of the outer VTile; "later_sibling" is
+        // the outer VTile's second, top-level child.
+        let nested = share(Recorder {
+            name: "nested_draw",
+            log: log.clone(),
+        });
+        let inner = share(HTile::from_vec(vec![nested]));
+        let later_sibling = share(Recorder {
+            name: "later_sibling_draw",
+            log: log.clone(),
+        });
+        let root = VTile::from_vec(vec![inner, later_sibling]);
+
+        let view = crate::view::View::new(crate::support::point::Extent::new(200.0, 400.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(200, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 200.0, 400.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        // Mirrors the corrected root render call (`host::macos`/`windows`/
+        // `linux`): one whole-tree `draw` pass, then one whole-tree
+        // `draw_overlay` pass -- not interleaved per container.
+        root.draw(&ctx);
+        root.draw_overlay(&ctx);
+
+        // Both draw-pass entries (nested's `Recorder::draw` logs
+        // "nested_draw", later_sibling's does the same distinct string via
+        // its own name) must appear before the overlay-pass entry -- if
+        // `VTile`/`HTile::draw` still embedded their own overlay pass, the
+        // nested recorder's overlay entry would show up as the *second*
+        // log entry (right after its own normal draw, both still inside
+        // the outer `VTile`'s first loop iteration), before
+        // `later_sibling`'s normal draw ever ran.
+        let log = log.read().unwrap();
+        assert_eq!(
+            *log,
+            vec![
+                "nested_draw",
+                "later_sibling_draw",
+                "nested_draw",
+                "later_sibling_draw"
+            ],
+            "expected both normal draws before either overlay draw, got {log:?}"
         );
     }
 }

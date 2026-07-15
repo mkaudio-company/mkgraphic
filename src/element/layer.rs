@@ -120,9 +120,11 @@ impl Element for Layer {
                 child.draw(ctx);
             }
         }
+    }
 
-        // Second pass: overlays (e.g. an expanded dropdown) always draw last
-        // so a later sibling's normal content never paints over them.
+    // Not a second pass embedded in `draw` -- see `tile::VTile::draw_overlay`'s
+    // doc comment for why (same bug, same fix, applies identically here).
+    fn draw_overlay(&self, ctx: &Context) {
         for i in 0..self.inner.len() {
             if let Some(child) = self.inner.at(i) {
                 child.draw_overlay(ctx);
@@ -373,6 +375,17 @@ impl Element for Deck {
         // Only draw active child
         if let Some(child) = self.inner.at(self.active_index) {
             child.draw(ctx);
+        }
+    }
+
+    // Single active child, like a wrapper element -- just forwards, same
+    // shape as `margin`/`size`/`proxy`/`align`'s own `draw_overlay`. `Deck`
+    // had no overlay pass at all before this fix (not just a mis-ordered
+    // one, unlike `Layer`/`Grid`/`VTile`/`HTile`): a `Dropdown` inside a
+    // `Deck`'s active child would never have rendered its popup at all.
+    fn draw_overlay(&self, ctx: &Context) {
+        if let Some(child) = self.inner.at(self.active_index) {
+            child.draw_overlay(ctx);
         }
     }
 

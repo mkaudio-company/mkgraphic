@@ -61,9 +61,9 @@ pub mod prelude {
         dial::{dial, dial_with_range, Dial},
         floating::{floating, Floating},
         grid::{grid, Grid},
-        label::{label, Label},
+        label::{heading, label, Heading, Label},
         layer::*,
-        list::{dropdown, list, Dropdown, List, ListItem},
+        list::{dropdown, list, Dropdown, List, ListItem, SelectionMode},
         margin::*,
         markdown_view::{markdown_view, MarkdownView},
         menu::{

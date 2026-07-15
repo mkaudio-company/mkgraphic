@@ -105,6 +105,15 @@ pub struct CodeEditor {
     read_only: RwLock<bool>,
     find_query: RwLock<String>,
     find_matches: RwLock<Vec<CursorPos>>,
+    /// Remainder text of a pending inline suggestion (what Tab would
+    /// insert), if any -- ghost-rendered by `draw_overlay` and accepted by
+    /// `handle_key`'s `Tab` branch. `suggestion_pos` is the cursor position
+    /// it was computed for; anything that moves the cursor away from that
+    /// exact position invalidates it (checked before ever accepting or
+    /// drawing it) rather than leaving stale ghost text or letting Tab
+    /// insert text at the wrong place.
+    suggestion: RwLock<Option<String>>,
+    suggestion_pos: RwLock<Option<CursorPos>>,
 
     background_color: Color,
     gutter_color: Color,
@@ -132,6 +141,13 @@ pub struct CodeEditor {
     dragging_h: RwLock<bool>,
     drag_start: RwLock<Point>,
     drag_start_scroll: RwLock<Point>,
+    /// Buffer position of the most recent mouse-down on the text (not a
+    /// scrollbar thumb) -- becomes the selection anchor the first time a
+    /// drag is actually detected (see `handle_drag`), so a plain click with
+    /// no movement never creates a zero-width "selection" (which would
+    /// otherwise still paint a thin highlight, since the selection-drawing
+    /// code gives even an empty range a minimum visible width).
+    pending_selection_start: RwLock<Option<CursorPos>>,
 }
 
 impl CodeEditor {
@@ -182,6 +198,8 @@ impl CodeEditor {
             read_only: RwLock::new(false),
             find_query: RwLock::new(String::new()),
             find_matches: RwLock::new(Vec::new()),
+            suggestion: RwLock::new(None),
+            suggestion_pos: RwLock::new(None),
             background_color: theme.input_box_color,
             gutter_color: theme.input_box_color.level(0.9),
             gutter_text_color: theme.text_box_idle_color,
@@ -207,6 +225,7 @@ impl CodeEditor {
             dragging_h: RwLock::new(false),
             drag_start: RwLock::new(Point::zero()),
             drag_start_scroll: RwLock::new(Point::zero()),
+            pending_selection_start: RwLock::new(None),
         };
         editor.reparse();
         editor
@@ -528,6 +547,126 @@ impl CodeEditor {
             }
         }
         *self.highlights.write().unwrap() = spans;
+        self.recompute_local_suggestion();
+    }
+
+    /// Built-in, model-free inline suggestion: matches the identifier
+    /// fragment immediately before the cursor against distinct identifiers
+    /// already in the buffer and a small static Rust keyword list, favoring
+    /// buffer-local matches as more contextually relevant. Runs from
+    /// `reparse` (i.e. after every edit, not per-frame -- same cost model as
+    /// highlighting). Callers that want a smarter suggestion (e.g. an LLM)
+    /// can overwrite whatever this produces via `set_suggestion`.
+    fn recompute_local_suggestion(&self) {
+        let lines = self.lines.read().unwrap();
+        let cursor = *self.cursor.read().unwrap();
+        let Some(line) = lines.get(cursor.line) else {
+            return;
+        };
+        let chars: Vec<char> = line.chars().collect();
+        let prefix_start = chars[..cursor.column.min(chars.len())]
+            .iter()
+            .rposition(|c| !is_ident_char(*c))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prefix: String = chars[prefix_start..cursor.column.min(chars.len())]
+            .iter()
+            .collect();
+        drop(lines);
+
+        if prefix.chars().count() < 2 {
+            *self.suggestion.write().unwrap() = None;
+            *self.suggestion_pos.write().unwrap() = None;
+            return;
+        }
+
+        let candidate = self
+            .buffer_identifier_completing(&prefix, cursor)
+            .or_else(|| {
+                RUST_KEYWORDS
+                    .iter()
+                    .find(|kw| kw.starts_with(prefix.as_str()) && **kw != prefix)
+                    .map(|kw| kw.to_string())
+            });
+
+        match candidate {
+            Some(candidate) => {
+                let remainder = candidate[prefix.len()..].to_string();
+                *self.suggestion.write().unwrap() = Some(remainder);
+                *self.suggestion_pos.write().unwrap() = Some(cursor);
+            }
+            None => {
+                *self.suggestion.write().unwrap() = None;
+                *self.suggestion_pos.write().unwrap() = None;
+            }
+        }
+    }
+
+    /// Finds a distinct identifier elsewhere in the buffer that starts with
+    /// `prefix` and isn't just `prefix` itself, skipping the occurrence at
+    /// `cursor` (the one currently being typed).
+    fn buffer_identifier_completing(&self, prefix: &str, cursor: CursorPos) -> Option<String> {
+        let lines = self.lines.read().unwrap();
+        for (line_idx, line) in lines.iter().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let mut start = 0;
+            while start < chars.len() {
+                if !is_ident_char(chars[start]) {
+                    start += 1;
+                    continue;
+                }
+                let mut end = start;
+                while end < chars.len() && is_ident_char(chars[end]) {
+                    end += 1;
+                }
+                let is_cursor_word =
+                    line_idx == cursor.line && start <= cursor.column && cursor.column <= end;
+                if !is_cursor_word {
+                    let word: String = chars[start..end].iter().collect();
+                    if word.len() > prefix.len() && word.starts_with(prefix) {
+                        return Some(word);
+                    }
+                }
+                start = end;
+            }
+        }
+        None
+    }
+
+    /// If a pending suggestion's recorded position still matches the
+    /// current cursor, clears and returns its remainder text (for `Tab` to
+    /// insert); otherwise leaves state untouched and returns `None`.
+    fn take_matching_suggestion(&self) -> Option<String> {
+        let matches = *self.suggestion_pos.read().unwrap() == Some(*self.cursor.read().unwrap());
+        if !matches {
+            return None;
+        }
+        self.suggestion_pos.write().unwrap().take();
+        self.suggestion.write().unwrap().take()
+    }
+
+    /// Overwrites (or clears, with `None`) the currently pending suggestion
+    /// -- for external callers (e.g. an LLM-backed completion source) to
+    /// supply a better suggestion than the built-in local one. Only takes
+    /// effect if the cursor hasn't moved since this call (checked at accept/
+    /// draw time via `suggestion_pos`, still set to wherever it was last
+    /// computed).
+    pub fn set_suggestion(&self, text: Option<String>) {
+        if text.is_some() {
+            *self.suggestion_pos.write().unwrap() = Some(*self.cursor.read().unwrap());
+        }
+        *self.suggestion.write().unwrap() = text;
+    }
+
+    /// The current line's text up to (not including) the cursor -- e.g. for
+    /// building an LLM completion prompt from outside this element.
+    pub fn cursor_line_prefix(&self) -> String {
+        let lines = self.lines.read().unwrap();
+        let cursor = *self.cursor.read().unwrap();
+        let Some(line) = lines.get(cursor.line) else {
+            return String::new();
+        };
+        line.chars().take(cursor.column).collect()
     }
 
     fn insert_text(&self, s: &str) {
@@ -1213,6 +1352,54 @@ impl Element for CodeEditor {
         self.draw_scrollbars(ctx);
     }
 
+    // Ghost-renders a pending suggestion's remainder text right after the
+    // caret, dimmed so it reads as a suggestion rather than real buffer
+    // content. A real overlay pass (not embedded in `draw`) so it always
+    // paints on top of everything else in the tree, including popups from
+    // sibling/ancestor elements -- see `Element::draw_overlay`'s doc comment
+    // and this crate's overlay z-order fix from earlier this session.
+    fn draw_overlay(&self, ctx: &Context) {
+        let Some(suggestion) = self.suggestion.read().unwrap().clone() else {
+            return;
+        };
+        let cursor = *self.cursor.read().unwrap();
+        if *self.suggestion_pos.read().unwrap() != Some(cursor)
+            || *self.state.read().unwrap() != EditorState::Focused
+        {
+            return;
+        }
+
+        let (first_visible_line, visible_lines, line_offset) = self.visible_line_window(ctx);
+        if cursor.line < first_visible_line || cursor.line >= first_visible_line + visible_lines {
+            return;
+        }
+
+        let lines = self.lines.read().unwrap();
+        let Some(line) = lines.get(cursor.line) else {
+            return;
+        };
+        let scroll_x = self.scroll_offset.read().unwrap().x;
+        let text_left = ctx.bounds.left + self.gutter_width + 6.0 - scroll_x;
+        let text_viewport = self.text_viewport(ctx);
+
+        let mut canvas = ctx.canvas.borrow_mut();
+        let theme = get_theme();
+        canvas.font(theme.text_box_font);
+        canvas.font_size(self.font_size);
+        canvas.save();
+        canvas.clip(text_viewport);
+
+        let row = cursor.line - first_visible_line;
+        let y_top = ctx.bounds.top + row as f32 * self.line_height - line_offset;
+        let y_baseline = y_top + self.line_height - self.font_size * 0.3;
+        let x = text_left + canvas.text_width_to_position(line, cursor.column);
+
+        canvas.fill_style(self.text_color.with_alpha(0.4));
+        canvas.fill_text(&suggestion, Point::new(x, y_baseline));
+
+        canvas.restore();
+    }
+
     fn hit_test(
         &self,
         ctx: &Context,
@@ -1270,11 +1457,27 @@ impl Element for CodeEditor {
             }
             *self.state.write().unwrap() = EditorState::Focused;
             let pos = self.cursor_pos_from_click(ctx, btn.pos);
+            // Shift-click extends the existing selection (or starts one
+            // from wherever the cursor already was, if there wasn't one)
+            // to the click point, the same as a shift+arrow key press --
+            // rather than the plain-click behavior of moving the cursor
+            // there and dropping any selection.
+            if btn.modifiers & crate::view::modifiers::SHIFT != 0 {
+                let mut anchor = self.selection_anchor.write().unwrap();
+                if anchor.is_none() {
+                    *anchor = Some(*self.cursor.read().unwrap());
+                }
+            } else {
+                *self.selection_anchor.write().unwrap() = None;
+            }
             *self.cursor.write().unwrap() = pos;
-            *self.selection_anchor.write().unwrap() = None;
+            *self.pending_selection_start.write().unwrap() = Some(pos);
+            *self.suggestion.write().unwrap() = None;
+            *self.suggestion_pos.write().unwrap() = None;
         } else {
             *self.dragging_v.write().unwrap() = false;
             *self.dragging_h.write().unwrap() = false;
+            *self.pending_selection_start.write().unwrap() = None;
         }
         true
     }
@@ -1311,6 +1514,28 @@ impl Element for CodeEditor {
             if track_range > 0.0 {
                 let new_x = start_scroll.x + delta_x * scroll_range / track_range;
                 self.set_scroll(ctx, new_x, start_scroll.y);
+            }
+        }
+
+        // Click-drag text selection: a mouse-down on the text (not a
+        // scrollbar thumb) records where it landed in `pending_selection_
+        // start` but doesn't touch `selection_anchor` itself, so a plain
+        // click with no movement never creates a zero-width "selection"
+        // (the drawing code gives even an empty range a minimum visible
+        // width, which would otherwise show a stray highlight sliver on
+        // every click). The anchor is only established here, the first
+        // time a drag actually happens, then left in place for every
+        // subsequent drag tick while the cursor tracks the pointer.
+        if !*self.dragging_v.read().unwrap() && !*self.dragging_h.read().unwrap() {
+            if let Some(start) = *self.pending_selection_start.read().unwrap() {
+                let mut anchor = self.selection_anchor.write().unwrap();
+                if anchor.is_none() {
+                    *anchor = Some(start);
+                }
+                drop(anchor);
+                *self.cursor.write().unwrap() = self.cursor_pos_from_click(ctx, btn.pos);
+                *self.suggestion.write().unwrap() = None;
+                *self.suggestion_pos.write().unwrap() = None;
             }
         }
     }
@@ -1354,6 +1579,27 @@ impl Element for CodeEditor {
         let shift = k.modifiers & crate::view::modifiers::SHIFT != 0;
         let ctrl =
             k.modifiers & (crate::view::modifiers::CONTROL | crate::view::modifiers::SUPER) != 0;
+
+        // Tab accepts a pending suggestion (see `take_matching_suggestion`)
+        // instead of indenting, but only while the cursor is still exactly
+        // where the suggestion was computed for -- anything else (cursor
+        // moved on since, or none pending) falls through to the plain
+        // 4-space insert below, unchanged.
+        if k.key == KeyCode::Tab && !shift && !ctrl {
+            if let Some(remainder) = self.take_matching_suggestion() {
+                self.insert_text(&remainder);
+                self.scroll_cursor_into_view(ctx);
+                return true;
+            }
+        }
+
+        // Any other key invalidates whatever suggestion was showing --
+        // `reparse` (called from the edit paths below) recomputes a fresh
+        // one where that makes sense, so this only has a lasting effect for
+        // cursor-movement keys, which should clear stale ghost text rather
+        // than leave it pointing at a position that no longer matches.
+        *self.suggestion.write().unwrap() = None;
+        *self.suggestion_pos.write().unwrap() = None;
 
         match k.key {
             KeyCode::Left => self.move_left(shift),
@@ -1433,6 +1679,27 @@ fn char_to_byte(line: &str, column: usize) -> usize {
         .map(|(i, _)| i)
         .unwrap_or(line.len())
 }
+
+/// Whether `c` can be part of an identifier word for the built-in local
+/// suggestion engine -- deliberately just `[A-Za-z0-9_]`, matching Rust
+/// identifier syntax closely enough for prefix-matching without needing a
+/// real tokenizer.
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Static keyword list for the built-in local suggestion engine's fallback
+/// candidate set, used when no buffer-local identifier completes the typed
+/// prefix. Rust-only (this editor only ever has one hardcoded grammar, see
+/// the module doc comment) -- not exhaustive, just the common ones worth
+/// suggesting.
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for",
+    "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
+    "while", "async", "await", "dyn", "String", "Vec", "Option", "Some", "None", "Result", "Ok",
+    "Err", "Arc", "RwLock", "Mutex", "Box",
+];
 
 /// Deletes the (line, column)-addressed range `[a, b)` (order-independent)
 /// from `lines` in place, and sets `*cursor` to the range's start.
@@ -1833,6 +2100,264 @@ mod editor_interaction_tests {
         assert!(
             !editor.highlights.read().unwrap().is_empty(),
             "new() should still apply real Rust highlighting -- plain() shouldn't have changed that"
+        );
+    }
+
+    fn focused_ctx_for(_editor: &CodeEditor) -> (crate::view::View, RefCell<Canvas>, Rect) {
+        let view = crate::view::View::new(crate::support::point::Extent::new(700.0, 400.0));
+        let canvas = RefCell::new(Canvas::new(700, 400).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 700.0, 400.0);
+        (view, canvas, bounds)
+    }
+
+    fn press(key: KeyCode) -> KeyInfo {
+        KeyInfo {
+            key,
+            action: crate::view::KeyAction::Press,
+            modifiers: 0,
+        }
+    }
+
+    #[test]
+    fn typing_a_prefix_matching_an_existing_identifier_suggests_its_remainder() {
+        let editor = CodeEditor::new().text("let processor = 1;\n");
+        *editor.cursor.write().unwrap() = CursorPos { line: 1, column: 0 };
+        for c in "proc".chars() {
+            editor.insert_text(&c.to_string());
+        }
+        assert_eq!(editor.get_text(), "let processor = 1;\nproc");
+        assert_eq!(
+            *editor.suggestion.read().unwrap(),
+            Some("essor".to_string()),
+            "\"proc\" should suggest the rest of the existing \"processor\" identifier"
+        );
+    }
+
+    #[test]
+    fn tab_accepts_a_pending_suggestion_instead_of_indenting() {
+        let editor = CodeEditor::new().text("let processor = 1;\n");
+        *editor.cursor.write().unwrap() = CursorPos { line: 1, column: 0 };
+        for c in "proc".chars() {
+            editor.insert_text(&c.to_string());
+        }
+        assert!(editor.suggestion.read().unwrap().is_some());
+        *editor.state.write().unwrap() = EditorState::Focused;
+
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+        assert!(editor.handle_key(&ctx, press(KeyCode::Tab)));
+
+        assert_eq!(
+            editor.get_text(),
+            "let processor = 1;\nprocessor",
+            "Tab should insert the suggestion's remainder, not a 4-space indent"
+        );
+        assert!(
+            editor.suggestion.read().unwrap().is_none(),
+            "accepting a suggestion should clear it"
+        );
+    }
+
+    #[test]
+    fn tab_without_a_pending_suggestion_still_indents() {
+        let editor = CodeEditor::new().text("");
+        *editor.state.write().unwrap() = EditorState::Focused;
+
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+        assert!(editor.handle_key(&ctx, press(KeyCode::Tab)));
+
+        assert_eq!(
+            editor.get_text(),
+            "    ",
+            "Tab with no pending suggestion should fall through to the existing indent behavior"
+        );
+    }
+
+    #[test]
+    fn moving_the_cursor_clears_a_pending_suggestion() {
+        let editor = CodeEditor::new().text("let processor = 1;\n");
+        *editor.cursor.write().unwrap() = CursorPos { line: 1, column: 0 };
+        for c in "proc".chars() {
+            editor.insert_text(&c.to_string());
+        }
+        assert!(editor.suggestion.read().unwrap().is_some());
+        *editor.state.write().unwrap() = EditorState::Focused;
+
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+        editor.handle_key(&ctx, press(KeyCode::Left));
+
+        assert!(
+            editor.suggestion.read().unwrap().is_none(),
+            "moving the cursor away should invalidate the pending suggestion"
+        );
+    }
+
+    #[test]
+    fn dragging_over_text_selects_it() {
+        let editor = CodeEditor::new().text("hello world");
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let start_pos = Point::new(60.0, 10.0);
+        let end_pos = Point::new(150.0, 10.0);
+        let expected_start = editor.cursor_pos_from_click(&ctx, start_pos);
+        let expected_end = editor.cursor_pos_from_click(&ctx, end_pos);
+        assert_ne!(
+            expected_start, expected_end,
+            "test click positions should land on different columns"
+        );
+
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: start_pos,
+        };
+        editor.handle_click(&ctx, down);
+        assert!(
+            editor.selection_anchor.read().unwrap().is_none(),
+            "a plain mouse-down shouldn't create a selection until actually dragged"
+        );
+
+        let drag = MouseButton {
+            pos: end_pos,
+            ..down
+        };
+        editor.handle_drag(&ctx, drag);
+
+        assert_eq!(
+            *editor.selection_anchor.read().unwrap(),
+            Some(expected_start),
+            "dragging should anchor the selection at the mouse-down position"
+        );
+        assert_eq!(
+            *editor.cursor.read().unwrap(),
+            expected_end,
+            "the cursor should track the drag position, extending the selection"
+        );
+    }
+
+    #[test]
+    fn releasing_the_drag_keeps_the_selection() {
+        let editor = CodeEditor::new().text("hello world");
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let down = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: Point::new(60.0, 10.0),
+        };
+        editor.handle_click(&ctx, down);
+        editor.handle_drag(
+            &ctx,
+            MouseButton {
+                pos: Point::new(150.0, 10.0),
+                ..down
+            },
+        );
+        assert!(editor.selection_anchor.read().unwrap().is_some());
+
+        let up = MouseButton {
+            down: false,
+            ..down
+        };
+        editor.handle_click(&ctx, up);
+
+        assert!(
+            editor.selection_anchor.read().unwrap().is_some(),
+            "releasing the mouse after a drag-select shouldn't clear the selection"
+        );
+    }
+
+    #[test]
+    fn shift_click_extends_the_selection_from_the_current_cursor() {
+        let editor = CodeEditor::new().text("hello world");
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let plain_click = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: Point::new(60.0, 10.0),
+        };
+        editor.handle_click(&ctx, plain_click);
+        let start_cursor = *editor.cursor.read().unwrap();
+        assert!(
+            editor.selection_anchor.read().unwrap().is_none(),
+            "a plain click shouldn't leave a selection"
+        );
+
+        let shift_click_pos = Point::new(150.0, 10.0);
+        let expected_end = editor.cursor_pos_from_click(&ctx, shift_click_pos);
+        assert_ne!(
+            start_cursor, expected_end,
+            "test positions should land on different columns"
+        );
+
+        let shift_click = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: crate::view::modifiers::SHIFT,
+            pos: shift_click_pos,
+        };
+        editor.handle_click(&ctx, shift_click);
+
+        assert_eq!(
+            *editor.selection_anchor.read().unwrap(),
+            Some(start_cursor),
+            "shift-click should anchor the selection at the cursor's position before the click"
+        );
+        assert_eq!(
+            *editor.cursor.read().unwrap(),
+            expected_end,
+            "shift-click should move the cursor to the click point, extending the selection"
+        );
+    }
+
+    #[test]
+    fn a_second_shift_click_extends_further_without_resetting_the_anchor() {
+        let editor = CodeEditor::new().text("hello world");
+        let (view, canvas, bounds) = focused_ctx_for(&editor);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let plain_click = MouseButton {
+            down: true,
+            click_count: 1,
+            button: MouseButtonKind::Left,
+            modifiers: 0,
+            pos: Point::new(60.0, 10.0),
+        };
+        editor.handle_click(&ctx, plain_click);
+        let start_cursor = *editor.cursor.read().unwrap();
+
+        let first_shift_click = MouseButton {
+            modifiers: crate::view::modifiers::SHIFT,
+            pos: Point::new(100.0, 10.0),
+            ..plain_click
+        };
+        editor.handle_click(&ctx, first_shift_click);
+        assert_eq!(*editor.selection_anchor.read().unwrap(), Some(start_cursor));
+
+        let second_shift_click = MouseButton {
+            modifiers: crate::view::modifiers::SHIFT,
+            pos: Point::new(150.0, 10.0),
+            ..plain_click
+        };
+        editor.handle_click(&ctx, second_shift_click);
+
+        assert_eq!(
+            *editor.selection_anchor.read().unwrap(),
+            Some(start_cursor),
+            "a later shift-click should keep extending from the same original anchor, not move it"
         );
     }
 }

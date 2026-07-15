@@ -384,6 +384,40 @@ impl Element for ScrollView {
         self.draw_scrollbars(ctx);
     }
 
+    // A real gap this fixes: `ScrollView` had no `draw_overlay` override at
+    // all (unlike `margin`/`size`/`proxy`/`align`, which all correctly
+    // forward to their one subject) -- so anything scrollable (any
+    // `Dropdown` inside a `scroll_view()`, e.g. MKIDE's Cargo.toml editor)
+    // had its overlay silently swallowed here regardless of the
+    // `VTile`/`HTile`/`Grid`/`Layer` ordering fix, since the recursive
+    // `draw_overlay` walk from the root (see `host::macos`/`windows`/
+    // `linux`) simply stopped at the default no-op the moment it reached a
+    // `ScrollView`. Recomputes the exact same scrolled `content_bounds`/
+    // viewport clip `draw` does, since an overlay should scroll and clip
+    // with its content, not float free of it.
+    fn draw_overlay(&self, ctx: &Context) {
+        let viewport = self.viewport_rect(ctx);
+        let scroll = *self.scroll_offset.read().unwrap();
+        let content_size = *self.content_size.read().unwrap();
+
+        if let Some(ref content) = self.content {
+            let content_bounds = Rect::new(
+                viewport.left - scroll.x,
+                viewport.top - scroll.y,
+                viewport.left - scroll.x + content_size.x,
+                viewport.top - scroll.y + content_size.y,
+            );
+
+            let content_ctx = ctx.with_bounds(content_bounds);
+            let mut canvas = ctx.canvas.borrow_mut();
+            canvas.save();
+            canvas.clip(viewport);
+            drop(canvas);
+            content.draw_overlay(&content_ctx);
+            ctx.canvas.borrow_mut().restore();
+        }
+    }
+
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
         self.refresh_auto_content_size(ctx);
         if !ctx.bounds.contains(p) {
@@ -529,6 +563,27 @@ impl Element for ScrollView {
             if track_range > 0.0 {
                 let new_scroll_x = start_scroll.x + delta_x * scroll_range / track_range;
                 self.set_scroll(Point::new(new_scroll_x, start_scroll.y));
+            }
+        }
+
+        // Neither scrollbar thumb is being dragged -- forward to content
+        // (e.g. a `CodeEditor` tracking a click-drag text selection).
+        // Without this, any drag starting inside a `ScrollView`'s content
+        // was silently swallowed here instead of reaching it, the same gap
+        // `TabBar::handle_drag` had (see that fix's doc comment).
+        if !dragging_v && !dragging_h {
+            if let Some(ref content) = self.content {
+                let viewport = self.viewport_rect(ctx);
+                let scroll = *self.scroll_offset.read().unwrap();
+                let content_size = *self.content_size.read().unwrap();
+                let content_bounds = Rect::new(
+                    viewport.left - scroll.x,
+                    viewport.top - scroll.y,
+                    viewport.left - scroll.x + content_size.x,
+                    viewport.top - scroll.y + content_size.y,
+                );
+                let content_ctx = ctx.with_bounds(content_bounds);
+                content.handle_drag(&content_ctx, btn);
             }
         }
     }

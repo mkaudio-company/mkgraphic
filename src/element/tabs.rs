@@ -408,6 +408,24 @@ impl TabBar {
             }
         }
     }
+
+    /// Mirrors `draw_content`, forwarding to the active tab's content's own
+    /// `draw_overlay` instead. `TabBar` had no `draw_overlay` at all before
+    /// this fix -- a real gap, not just a mis-ordered one: since literally
+    /// every MKIDE window's content lives inside a tab, any overlay
+    /// anywhere in the app (any `Dropdown`, however deeply nested) was
+    /// silently swallowed right here, regardless of the `VTile`/`HTile`/
+    /// `Grid`/`Layer`/`ScrollView` ordering/forwarding fixes those needed.
+    fn draw_overlay_content(&self, ctx: &Context, tabs: &[Tab]) {
+        let active = *self.active_index.read().unwrap();
+        if let Some(tab) = tabs.get(active) {
+            if let Some(ref content) = tab.content {
+                let content_rect = self.content_rect(ctx);
+                let content_ctx = ctx.with_bounds(content_rect);
+                content.draw_overlay(&content_ctx);
+            }
+        }
+    }
 }
 
 impl Default for TabBar {
@@ -432,6 +450,11 @@ impl Element for TabBar {
         let tabs = self.tabs.read().unwrap();
         self.draw_content(ctx, &tabs);
         self.draw_tabs(ctx, &tabs);
+    }
+
+    fn draw_overlay(&self, ctx: &Context) {
+        let tabs = self.tabs.read().unwrap();
+        self.draw_overlay_content(ctx, &tabs);
     }
 
     fn hit_test(
@@ -467,12 +490,10 @@ impl Element for TabBar {
             return false;
         }
 
-        if !btn.down {
-            return true;
-        }
-
-        // Check if clicking on a tab (or its close button)
-        {
+        // Check if clicking on a tab (or its close button) -- press only;
+        // switching the active tab (or closing one) on release as well
+        // would double-fire since the press above already did it.
+        if btn.down {
             let tabs = self.tabs.read().unwrap();
             for i in 0..tabs.len() {
                 let rect = self.tab_rect(ctx, &tabs, i);
@@ -500,7 +521,13 @@ impl Element for TabBar {
             }
         }
 
-        // Forward to content
+        // Forward to content -- both press *and* release. A `BasicButton`'s
+        // click callback only fires on release while its state is still
+        // `Pressed` (set by the matching press); unconditionally swallowing
+        // every release here (the previous `if !btn.down { return true; }`)
+        // meant the press reached and armed every button/control in every
+        // tab's content, but the release that would have fired it never
+        // did -- silently breaking every button anywhere inside a tab.
         let active = *self.active_index.read().unwrap();
         let tabs = self.tabs.read().unwrap();
         if let Some(tab) = tabs.get(active) {
@@ -579,6 +606,32 @@ impl Element for TabBar {
         }
         let content_ctx = ctx.with_bounds(content_rect);
         content.handle_scroll(&content_ctx, dir, p)
+    }
+
+    // Without this, dragging over a tab's content (e.g. click-dragging to
+    // select text in a `CodeEditor`) never worked at all: the host's
+    // `mouseDragged:` handler reaches this element just fine, but with no
+    // `handle_drag` override here, the default `Element` impl (a no-op)
+    // silently swallowed it before it ever reached the active tab's
+    // content -- the same class of gap `handle_click`'s old `if !btn.down
+    // { return true; }` was (see that fix's comment above), just for drags
+    // instead of releases.
+    fn drag(&mut self, ctx: &Context, btn: MouseButton) {
+        self.handle_drag(ctx, btn);
+    }
+
+    fn handle_drag(&self, ctx: &Context, btn: MouseButton) {
+        let active = *self.active_index.read().unwrap();
+        let tabs = self.tabs.read().unwrap();
+        let Some(tab) = tabs.get(active) else {
+            return;
+        };
+        let Some(ref content) = tab.content else {
+            return;
+        };
+        let content_rect = self.content_rect(ctx);
+        let content_ctx = ctx.with_bounds(content_rect);
+        content.handle_drag(&content_ctx, btn);
     }
 
     fn clear_focus(&self) {

@@ -165,6 +165,23 @@ impl Element for Floating {
         }
     }
 
+    // `Floating` wraps a single `content` child but had no `draw_overlay`
+    // forwarding it at all (a real, separate gap from the `VTile`/`HTile`
+    // ordering bug -- like `ScrollView`/`TabBar` before this same fix, it
+    // silently swallowed any overlay inside a floating panel's content).
+    fn draw_overlay(&self, ctx: &Context) {
+        if !self.is_visible() {
+            return;
+        }
+        if let Some(ref content) = self.content {
+            let bounds = self.floating_bounds();
+            let inset = 8.0;
+            let content_bounds = bounds.inset(inset, inset);
+            let content_ctx = ctx.with_bounds(content_bounds);
+            content.draw_overlay(&content_ctx);
+        }
+    }
+
     fn hit_test(&self, ctx: &Context, p: Point, leaf: bool, control: bool) -> Option<&dyn Element> {
         if !self.is_visible() {
             return None;

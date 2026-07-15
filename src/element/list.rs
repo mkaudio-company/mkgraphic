@@ -171,6 +171,31 @@ impl List {
         self.selected.write().unwrap().clear();
     }
 
+    /// The number of items currently in the list -- needed to drain it
+    /// via repeated `remove_item` calls (there's no bulk `set_items` at
+    /// runtime, only the consuming builder-form `items`) before
+    /// repopulating with e.g. a new set of search results.
+    pub fn item_count(&self) -> usize {
+        self.items.read().unwrap().len()
+    }
+
+    /// A clone of the item at `index`, if any -- for reading back
+    /// whatever `data` (e.g. a real crate name distinct from the row's
+    /// display label) a selected row carries, since `get_selected` only
+    /// returns indices.
+    pub fn get_item(&self, index: usize) -> Option<ListItem> {
+        self.items.read().unwrap().get(index).cloned()
+    }
+
+    /// Removes every item and clears selection -- for repopulating a
+    /// list at runtime (e.g. new search results) without rebuilding the
+    /// whole element, since `items(self, ...)` only exists as a
+    /// consuming builder method.
+    pub fn clear(&self) {
+        self.items.write().unwrap().clear();
+        self.selected.write().unwrap().clear();
+    }
+
     /// Adds an item.
     pub fn add_item(&self, item: ListItem) {
         self.items.write().unwrap().push(item);
@@ -865,6 +890,31 @@ mod tests {
     use super::*;
     use crate::support::canvas::Canvas;
     use crate::view::View;
+
+    #[test]
+    fn clear_removes_every_item_and_selection() {
+        let list = List::new().items_from_strings(vec!["a", "b", "c"]);
+        list.set_selected(1);
+        assert_eq!(list.item_count(), 3);
+
+        list.clear();
+
+        assert_eq!(list.item_count(), 0);
+        assert!(list.get_selected().is_empty());
+    }
+
+    #[test]
+    fn item_count_tracks_add_and_remove() {
+        let list = List::new();
+        assert_eq!(list.item_count(), 0);
+
+        list.add_item(ListItem::new("a"));
+        list.add_item(ListItem::new("b"));
+        assert_eq!(list.item_count(), 2);
+
+        list.remove_item(0);
+        assert_eq!(list.item_count(), 1);
+    }
 
     #[test]
     fn dropdown_bounds_opens_downward_when_space_below_is_sufficient() {

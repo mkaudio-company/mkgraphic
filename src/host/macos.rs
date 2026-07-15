@@ -1028,8 +1028,14 @@ declare_class!(
 
                     let ctx = Context::new(&temp_view, &canvas_cell, bounds);
 
-                    // Draw the content element
+                    // Draw the content element, then every overlay (an
+                    // expanded dropdown popup, etc.) in a genuinely separate
+                    // second pass over the *whole* tree -- not embedded in
+                    // `draw` itself, which was a real bug for any overlay
+                    // nested more than one level deep (see
+                    // `element::tile::VTile::draw_overlay`'s doc comment).
                     content.draw(&ctx);
+                    content.draw_overlay(&ctx);
 
                     // Get the canvas back
                     *canvas = canvas_cell.into_inner();

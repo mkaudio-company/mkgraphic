@@ -487,7 +487,11 @@ fn paint(hwnd: HWND, state: &WindowState) {
             let canvas_cell = RefCell::new(temp_canvas);
             let ctx = Context::new(&temp_view, &canvas_cell, bounds);
 
+            // See `host::macos`'s identical fix: overlays need a genuinely
+            // separate second pass over the whole tree, not one embedded in
+            // `draw` (element::tile::VTile::draw_overlay's doc comment).
             content.draw(&ctx);
+            content.draw_overlay(&ctx);
 
             *canvas = canvas_cell.into_inner();
         }
