@@ -3,7 +3,7 @@ members = ["xtask"]
 
 [package]
 name = "mkgraphic"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "A Rust port of the cycfi/elements GUI framework"
 license = "MIT"
@@ -34,6 +34,10 @@ ttf-parser = "0.20"
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 streaming-iterator = "0.1"
+
+# Markdown rendering for ChatHistory's message bubbles (bold/italic/code/
+# lists) -- first markdown-parsing dependency in this workspace.
+pulldown-cmark = { version = "0.12", default-features = false }
 
 # Platform-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]

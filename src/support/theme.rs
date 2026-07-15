@@ -101,6 +101,15 @@ pub struct Theme {
     // Selection
     pub selection_hilite_color: Color,
 
+    // Chat bubbles (see `element::chat_history::ChatHistory`)
+    pub chat_user_bubble_color: Color,
+    pub chat_assistant_bubble_color: Color,
+    pub chat_system_text_color: Color,
+    /// Muted text color for a message's "Thinking" section -- rendered
+    /// italic, so this just needs to read as de-emphasized against
+    /// `chat_assistant_bubble_color`, not carry the distinction alone.
+    pub chat_thinking_text_color: Color,
+
     // Miscellaneous
     pub element_background_color: Color,
     pub element_background_opacity: f32,
@@ -213,6 +222,12 @@ impl Theme {
             // Selection
             selection_hilite_color: Color::from_rgba_u8(70, 130, 180, 100),
 
+            // Chat bubbles
+            chat_user_bubble_color: Color::from_rgb_u8(70, 130, 180),
+            chat_assistant_bubble_color: Color::from_rgb_u8(50, 55, 65),
+            chat_system_text_color: Color::from_rgba_u8(200, 200, 200, 130),
+            chat_thinking_text_color: Color::from_rgba_u8(200, 200, 200, 130),
+
             // Miscellaneous
             element_background_color: Color::from_rgb_u8(35, 39, 46),
             element_background_opacity: 0.95,
@@ -318,6 +333,12 @@ impl Theme {
 
             // Selection
             selection_hilite_color: Color::from_rgba_u8(70, 130, 180, 80),
+
+            // Chat bubbles
+            chat_user_bubble_color: Color::from_rgb_u8(70, 130, 180),
+            chat_assistant_bubble_color: Color::from_rgb_u8(225, 226, 230),
+            chat_system_text_color: Color::from_rgba_u8(100, 100, 100, 160),
+            chat_thinking_text_color: Color::from_rgba_u8(100, 100, 100, 160),
 
             // Miscellaneous
             element_background_color: Color::from_rgb_u8(250, 250, 252),

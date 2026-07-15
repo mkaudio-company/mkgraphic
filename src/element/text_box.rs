@@ -25,7 +25,10 @@ pub type TextChangeCallback = Box<dyn Fn(&str) + Send + Sync>;
 /// Callback type for enter key.
 pub type EnterCallback = Box<dyn Fn(&str) + Send + Sync>;
 
-/// A single-line text input element.
+/// A text input element. Single-line by default; content only spans
+/// multiple visual rows if a caller's own `on_enter` callback is wired
+/// up so that Shift+Enter can insert a newline (see `handle_key`) --
+/// there's no automatic word-wrapping.
 pub struct TextBox {
     text: RwLock<String>,
     placeholder: String,
@@ -98,6 +101,15 @@ impl TextBox {
         self
     }
 
+    /// Sets the height. Useful for growing past the default single-line
+    /// height so multiple wrapped/inserted lines (see `on_enter`'s
+    /// Shift+Enter handling) are actually visible at once instead of just
+    /// scrolling past the box's own clip region.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height;
+        self
+    }
+
     /// Sets password mode (displays dots instead of text).
     pub fn password(mut self, password: bool) -> Self {
         self.password_mode = password;
@@ -150,6 +162,40 @@ impl TextBox {
         } else {
             text.clone()
         }
+    }
+
+    /// Vertical spacing between rows once `text` contains a newline (see
+    /// `Shift+Enter` in `handle_key`). Single-line content never uses
+    /// this -- it stays vertically centered exactly as before.
+    fn line_height(&self) -> f32 {
+        self.font_size * 1.3
+    }
+
+    /// Splits a flat char-index cursor position into (row, col) against a
+    /// possibly multi-line `text`, for caret/selection placement.
+    fn row_col_for_pos(text: &str, pos: usize) -> (usize, usize) {
+        let mut row = 0;
+        let mut col = 0;
+        for (i, c) in text.chars().enumerate() {
+            if i >= pos {
+                break;
+            }
+            if c == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (row, col)
+    }
+
+    /// (row_top, row_bottom, baseline_y) for one row of multi-line text,
+    /// matching the row layout `draw_text`'s multi-line branch uses.
+    fn multiline_row_bounds(&self, ctx: &Context, row: usize) -> (f32, f32, f32) {
+        let line_height = self.line_height();
+        let row_top = ctx.bounds.top + self.padding + row as f32 * line_height;
+        (row_top, row_top + line_height, row_top + self.font_size * 0.85)
     }
 
     /// Inserts text at cursor position.
@@ -353,6 +399,22 @@ impl TextBox {
         *cursor_pos = char_count;
     }
 
+    /// Handles an Enter keypress: Shift+Enter inserts a literal newline
+    /// (lets a chat-style input grow to multiple lines); plain Enter
+    /// fires `on_enter` (typically "submit") instead, leaving the text
+    /// untouched. Split out from `handle_key` so it's testable without
+    /// needing a real `Context`.
+    fn handle_enter(&self, shift: bool) {
+        if shift {
+            self.insert_text("\n");
+            if let Some(ref callback) = self.on_change {
+                callback(&self.get_text());
+            }
+        } else if let Some(ref callback) = self.on_enter {
+            callback(&self.get_text());
+        }
+    }
+
     /// Selects all text.
     fn select_all(&self) {
         let text = self.text.read().unwrap();
@@ -402,8 +464,18 @@ impl TextBox {
 
         canvas.font_size(self.font_size);
 
+        // Without this, text/placeholder content wider than the box's own
+        // bounds (e.g. a long placeholder on a narrow box, or typed text
+        // past the visible width -- this box has no internal horizontal
+        // scroll) paints straight through whatever sits next to it in the
+        // layout, rather than just getting cut off at the box's own edge.
+        // Matches `CodeEditor`'s own `canvas.save()`/`clip()`/`restore()`
+        // convention for its text drawing.
+        canvas.save();
+        canvas.clip(ctx.bounds);
+
         if display.is_empty() && !self.placeholder.is_empty() {
-            // Draw placeholder
+            // Draw placeholder (always single-line, vertically centered)
             let color = if state == TextBoxState::Disabled {
                 self.placeholder_color.with_alpha(0.3)
             } else {
@@ -420,9 +492,25 @@ impl TextBox {
                 self.text_color
             };
             canvas.fill_style(color);
-            let y = text_area.center().y + self.font_size * 0.35;
-            canvas.fill_text(&display, Point::new(text_area.left, y));
+
+            if !display.contains('\n') {
+                // Unchanged single-line layout: vertically centered.
+                let y = text_area.center().y + self.font_size * 0.35;
+                canvas.fill_text(&display, Point::new(text_area.left, y));
+            } else {
+                // Content contains a newline (see `Shift+Enter` in
+                // `handle_key`) -- lay rows out top-aligned instead of
+                // centering the whole (unbounded-height) block.
+                let line_height = self.line_height();
+                let mut y = text_area.top + self.padding + self.font_size * 0.85;
+                for line in display.split('\n') {
+                    canvas.fill_text(line, Point::new(text_area.left, y));
+                    y += line_height;
+                }
+            }
         }
+
+        canvas.restore();
     }
 
     fn draw_selection(&self, ctx: &Context) {
@@ -446,13 +534,40 @@ impl TextBox {
 
         // Measure text width up to start and end positions
         canvas.font_size(self.font_size);
-        let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
-        let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, end);
 
-        let sel_rect = Rect::new(x1, ctx.bounds.top + 4.0, x2, ctx.bounds.bottom - 4.0);
-
+        // Same overflow risk as `draw_text` -- a selection extending past
+        // the box's own (unscrolled) visible width would otherwise paint
+        // the highlight rect over neighboring widgets too.
+        canvas.save();
+        canvas.clip(ctx.bounds);
         canvas.fill_style(self.highlight_color);
-        canvas.fill_rect(sel_rect);
+
+        if !display.contains('\n') {
+            let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, start);
+            let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, end);
+            let sel_rect = Rect::new(x1, ctx.bounds.top + 4.0, x2, ctx.bounds.bottom - 4.0);
+            canvas.fill_rect(sel_rect);
+        } else {
+            // Selection spans (possibly) multiple rows -- draw one rect
+            // per row: partial on the start/end rows, full-width on any
+            // row strictly between them.
+            let lines: Vec<&str> = display.split('\n').collect();
+            let (start_row, start_col) = Self::row_col_for_pos(&display, start);
+            let (end_row, end_col) = Self::row_col_for_pos(&display, end);
+
+            for row in start_row..=end_row {
+                let line = lines.get(row).copied().unwrap_or("");
+                let col_start = if row == start_row { start_col } else { 0 };
+                let col_end = if row == end_row { end_col } else { line.chars().count() };
+
+                let x1 = ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_start);
+                let x2 = ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col_end);
+                let (row_top, row_bottom, _) = self.multiline_row_bounds(ctx, row);
+                canvas.fill_rect(Rect::new(x1, row_top, x2, row_bottom));
+            }
+        }
+
+        canvas.restore();
     }
 
     fn draw_caret(&self, ctx: &Context) {
@@ -467,17 +582,30 @@ impl TextBox {
 
         // Measure text width up to cursor position
         canvas.font_size(self.font_size);
-        let x =
-            ctx.bounds.left + self.padding + canvas.text_width_to_position(&display, cursor_pos);
-        let y1 = ctx.bounds.top + 4.0;
-        let y2 = ctx.bounds.bottom - 4.0;
+        let (x, y1, y2) = if !display.contains('\n') {
+            let x = ctx.bounds.left
+                + self.padding
+                + canvas.text_width_to_position(&display, cursor_pos);
+            (x, ctx.bounds.top + 4.0, ctx.bounds.bottom - 4.0)
+        } else {
+            let (row, col) = Self::row_col_for_pos(&display, cursor_pos);
+            let line = display.split('\n').nth(row).unwrap_or("");
+            let x = ctx.bounds.left + self.padding + canvas.text_width_to_position(line, col);
+            let (row_top, row_bottom, _) = self.multiline_row_bounds(ctx, row);
+            (x, row_top, row_bottom)
+        };
 
+        // Same overflow risk as `draw_text` -- a caret past the box's own
+        // (unscrolled) visible width would otherwise draw outside it.
+        canvas.save();
+        canvas.clip(ctx.bounds);
         canvas.stroke_style(self.caret_color);
         canvas.line_width(1.5);
         canvas.begin_path();
         canvas.move_to(Point::new(x, y1));
         canvas.line_to(Point::new(x, y2));
         canvas.stroke();
+        canvas.restore();
     }
 }
 
@@ -488,8 +616,15 @@ impl Default for TextBox {
 }
 
 impl Element for TextBox {
+    /// `self.width` is a *minimum*, not a fixed size -- `max.x` is left
+    /// unbounded so a genuinely stretchy sibling (see `stretch` below)
+    /// actually receives extra horizontal space from its container
+    /// instead of being clamped straight back down to `self.width`
+    /// regardless of how much room is available. Height stays fixed,
+    /// matching `stretch`'s `(1.0, 0.0)` -- this is a single-line box,
+    /// not vertically resizable.
     fn limits(&self, _ctx: &BasicContext) -> ViewLimits {
-        ViewLimits::fixed(self.width, self.height)
+        ViewLimits::new(Point::new(self.width, self.height), Point::new(super::FULL_EXTENT, self.height))
     }
 
     fn stretch(&self) -> ViewStretch {
@@ -619,9 +754,7 @@ impl Element for TextBox {
                 return true;
             }
             KeyCode::Enter => {
-                if let Some(ref callback) = self.on_enter {
-                    callback(&self.get_text());
-                }
+                self.handle_enter(shift);
                 return true;
             }
             KeyCode::A if ctrl => {
@@ -719,4 +852,49 @@ pub fn text_box_with_text(text: impl Into<String>) -> TextBox {
 /// Creates a password input field.
 pub fn password_box() -> TextBox {
     TextBox::new().password(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn shift_enter_inserts_a_newline_without_firing_on_enter() {
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_clone = fired.clone();
+        let tb = TextBox::new()
+            .text("hello")
+            .on_enter(move |_| fired_clone.store(true, Ordering::SeqCst));
+
+        tb.handle_enter(true);
+
+        assert_eq!(tb.get_text(), "hello\n");
+        assert!(!fired.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn plain_enter_fires_on_enter_and_leaves_text_untouched() {
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_clone = captured.clone();
+        let tb = TextBox::new()
+            .text("hello")
+            .on_enter(move |text| *captured_clone.lock().unwrap() = text.to_string());
+
+        tb.handle_enter(false);
+
+        assert_eq!(tb.get_text(), "hello");
+        assert_eq!(*captured.lock().unwrap(), "hello");
+    }
+
+    #[test]
+    fn row_col_for_pos_tracks_newlines_correctly() {
+        let text = "ab\ncde\nf";
+        assert_eq!(TextBox::row_col_for_pos(text, 0), (0, 0));
+        assert_eq!(TextBox::row_col_for_pos(text, 2), (0, 2));
+        assert_eq!(TextBox::row_col_for_pos(text, 3), (1, 0));
+        assert_eq!(TextBox::row_col_for_pos(text, 7), (2, 0));
+        assert_eq!(TextBox::row_col_for_pos(text, 8), (2, 1));
+    }
 }

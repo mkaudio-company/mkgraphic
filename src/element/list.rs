@@ -562,16 +562,31 @@ impl Dropdown {
         self.height
     }
 
+    /// Below the button by default; opens upward instead when the window
+    /// doesn't have enough room left below the button (e.g. a dropdown
+    /// sitting near the bottom of its window) -- otherwise the popup got
+    /// clipped by the window's own bottom edge partway through its item
+    /// list, which read as a broken/"trimmed" dropdown.
     fn dropdown_bounds(&self, ctx: &Context) -> Rect {
         let item_count = self.items.len().min(5);
         let height = (item_count as f32 * self.item_height()).min(self.dropdown_height);
 
-        Rect::new(
-            ctx.bounds.left,
-            ctx.bounds.bottom + 2.0,
-            ctx.bounds.right,
-            ctx.bounds.bottom + 2.0 + height,
-        )
+        let space_below = ctx.view.bounds().bottom - ctx.bounds.bottom;
+        if space_below >= height + 2.0 {
+            Rect::new(
+                ctx.bounds.left,
+                ctx.bounds.bottom + 2.0,
+                ctx.bounds.right,
+                ctx.bounds.bottom + 2.0 + height,
+            )
+        } else {
+            Rect::new(
+                ctx.bounds.left,
+                ctx.bounds.top - 2.0 - height,
+                ctx.bounds.right,
+                ctx.bounds.top - 2.0,
+            )
+        }
     }
 
     fn draw_button(&self, ctx: &Context) {
@@ -587,6 +602,13 @@ impl Dropdown {
 
         canvas.fill_style(color);
         canvas.fill_round_rect(ctx.bounds, self.corner_radius);
+
+        // A selected item's full text (e.g. a long role name) wider than
+        // this button's own bounds would otherwise paint straight through
+        // whatever sits next to it in the layout -- same bug, same fix,
+        // as `TextBox::draw_text`.
+        canvas.save();
+        canvas.clip(ctx.bounds);
 
         // Text
         let selected = *self.selected.read().unwrap();
@@ -612,6 +634,8 @@ impl Dropdown {
         let arrow = if expanded { "▲" } else { "▼" };
         let arrow_x = ctx.bounds.right - 20.0;
         canvas.fill_text(arrow, Point::new(arrow_x, y));
+
+        canvas.restore();
     }
 
     fn draw_dropdown(&self, ctx: &Context) {
@@ -680,8 +704,16 @@ impl Element for Dropdown {
         ViewLimits::fixed(self.width, self.height)
     }
 
+    /// Fixed-size (see `limits` above), so no stretch -- matches
+    /// `BasicButton`'s own "fixed size, so no stretch" convention. This
+    /// used to claim `(1.0, 0.0)` while `limits` fixed both min and max to
+    /// the same value, so it could never actually grow regardless -- worse,
+    /// in a row with a genuinely stretchy sibling (e.g. `TextBox`), it
+    /// would falsely compete for a share of the extra space that then got
+    /// clamped straight back down and wasted, instead of all going to the
+    /// sibling that could actually use it.
     fn stretch(&self) -> ViewStretch {
-        ViewStretch::new(1.0, 0.0)
+        ViewStretch::new(0.0, 0.0)
     }
 
     fn draw(&self, ctx: &Context) {
@@ -734,7 +766,8 @@ impl Element for Dropdown {
 
         let expanded = *self.expanded.read().unwrap();
 
-        // Check dropdown area FIRST when expanded (dropdown is below button)
+        // Check dropdown area FIRST when expanded (`dropdown_bounds` may
+        // place it above or below the button, see its own doc comment)
         if expanded {
             let dropdown_rect = self.dropdown_bounds(ctx);
             if dropdown_rect.contains(btn.pos) {
@@ -825,4 +858,43 @@ pub fn list() -> List {
 /// Creates a dropdown.
 pub fn dropdown() -> Dropdown {
     Dropdown::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::support::canvas::Canvas;
+    use crate::view::View;
+
+    #[test]
+    fn dropdown_bounds_opens_downward_when_space_below_is_sufficient() {
+        let dd = Dropdown::new().items(vec!["a", "b", "c", "d", "e"]);
+        let view = View::new(crate::support::point::Extent::new(200.0, 400.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(200, 400).unwrap());
+        // Button near the top -- plenty of room below for the popup.
+        let button_bounds = Rect::new(10.0, 10.0, 110.0, 30.0);
+        let ctx = Context::new(&view, &canvas, button_bounds);
+
+        let popup = dd.dropdown_bounds(&ctx);
+
+        assert_eq!(popup.top, button_bounds.bottom + 2.0);
+        assert!(popup.bottom > popup.top);
+    }
+
+    #[test]
+    fn dropdown_bounds_opens_upward_when_space_below_is_insufficient() {
+        let dd = Dropdown::new().items(vec!["a", "b", "c", "d", "e"]);
+        let view = View::new(crate::support::point::Extent::new(200.0, 100.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(200, 100).unwrap());
+        // Button near the bottom of a short window -- not enough room
+        // below for a 5-item popup, so it should flip upward instead of
+        // getting clipped by the window's own bottom edge.
+        let button_bounds = Rect::new(10.0, 70.0, 110.0, 90.0);
+        let ctx = Context::new(&view, &canvas, button_bounds);
+
+        let popup = dd.dropdown_bounds(&ctx);
+
+        assert_eq!(popup.bottom, button_bounds.top - 2.0);
+        assert!(popup.top < popup.bottom);
+    }
 }

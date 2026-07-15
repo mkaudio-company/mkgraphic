@@ -52,8 +52,9 @@ pub mod prelude {
     pub use crate::element::{
         align::*,
         button::{button, BasicButton},
+        chat_history::{chat_history, ChatHistory, ChatMessage, ChatSender},
         checkbox::{checkbox, radio_button, Checkbox, RadioButton, RadioGroup},
-        code_editor::{code_editor, CodeEditor, Diagnostic, DiagnosticSeverity},
+        code_editor::{code_editor, code_editor_plain, CodeEditor, Diagnostic, DiagnosticSeverity},
         composite::{Composite, CompositeBase},
         context::{BasicContext, Context},
         design_canvas::{design_canvas, DesignCanvas},
@@ -64,6 +65,7 @@ pub mod prelude {
         layer::*,
         list::{dropdown, list, Dropdown, List, ListItem},
         margin::*,
+        markdown_view::{markdown_view, MarkdownView},
         menu::{
             get_native_menu_bar, menu, menu_item, menu_separator, native_menu, native_menu_bar,
             native_menu_item, native_separator, popup, set_native_menu_bar, Menu, MenuItem,

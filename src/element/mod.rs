@@ -28,6 +28,7 @@
 
 pub mod align;
 pub mod button;
+pub mod chat_history;
 pub mod checkbox;
 pub mod code_editor;
 pub mod composite;
@@ -40,6 +41,7 @@ pub mod label;
 pub mod layer;
 pub mod list;
 pub mod margin;
+pub mod markdown_view;
 pub mod menu;
 pub mod progress;
 pub mod proxy;

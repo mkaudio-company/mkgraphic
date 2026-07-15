@@ -137,7 +137,6 @@ pub struct CodeEditor {
 impl CodeEditor {
     /// Creates a new code editor with Rust syntax highlighting.
     pub fn new() -> Self {
-        let theme = get_theme();
         let mut parser = tree_sitter::Parser::new();
         let query = parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
@@ -149,7 +148,23 @@ impl CodeEditor {
                     })
                     .ok()
             });
+        Self::with_query(parser, query)
+    }
 
+    /// Creates a code editor with no syntax highlighting at all -- for
+    /// content that isn't Rust (this element only ever had one hardcoded
+    /// grammar, per its own module doc comment) but still wants every
+    /// other `CodeEditor` capability: multi-line editing, undo/redo,
+    /// find, scrolling. `reparse` (see its own doc comment) already
+    /// early-returns when `query` is `None`, so this is just "never give
+    /// it a query," not a separate code path -- `highlights` simply stays
+    /// empty regardless of what's typed.
+    pub fn plain() -> Self {
+        Self::with_query(tree_sitter::Parser::new(), None)
+    }
+
+    fn with_query(parser: tree_sitter::Parser, query: Option<tree_sitter::Query>) -> Self {
+        let theme = get_theme();
         let editor = Self {
             lines: RwLock::new(vec![String::new()]),
             cursor: RwLock::new(CursorPos::default()),
@@ -1404,6 +1419,12 @@ pub fn code_editor() -> CodeEditor {
     CodeEditor::new()
 }
 
+/// Creates a code editor with no syntax highlighting -- see
+/// [`CodeEditor::plain`].
+pub fn code_editor_plain() -> CodeEditor {
+    CodeEditor::plain()
+}
+
 // --- helpers -----------------------------------------------------------
 
 fn char_to_byte(line: &str, column: usize) -> usize {
@@ -1599,6 +1620,29 @@ impl HighlightColors {
     }
 }
 
+/// A real, pre-existing bug caught while adding `CodeEditor::plain()` (see
+/// its own doc comment): `tree_sitter::Query::new` was silently failing to
+/// compile this *entire* query, because `"mut"`/`"crate"`/`"super"`/`"self"`
+/// aren't bare anonymous tokens in `tree-sitter-rust` 0.23's grammar --
+/// confirmed via its own `node-types.json`: `mut` has no token at all
+/// (only the named nodes `mutable_specifier`/`mut_pattern` exist), and
+/// `crate`/`super`/`self` exist *only* as named nodes (`"named": true`,
+/// no anonymous variant), since they can appear as real path segments
+/// (`crate::foo`, `self.bar`), not just bare keywords. A bare string
+/// literal in a query can only ever match an anonymous token, so all four
+/// were rejected as "invalid node type," and tree-sitter fails the whole
+/// query over a single bad alternative, not just that one. Since the
+/// failure is swallowed by `log::warn!` (a no-op with no logger installed,
+/// e.g. under `cargo test`) and turns into a silently empty `Option<Query>`
+/// (see `CodeEditor::new`), Rust syntax highlighting had been completely
+/// non-functional -- `query` was always `None`, `reparse` always
+/// early-returned, `highlights` was always empty -- with nothing visibly
+/// wrong short of noticing the editor never actually highlighted anything.
+/// Fixed by matching each as its own named-node pattern instead of a bare
+/// string in the keyword list (`"Self"` was dropped outright: it has no
+/// node-types.json entry at all in this grammar, named or anonymous --
+/// it's just tokenized as a regular `type_identifier`/`identifier`, which
+/// already gets `@type` coloring via the pattern above).
 const RUST_HIGHLIGHT_QUERY: &str = r#"
 (line_comment) @comment
 (block_comment) @comment
@@ -1612,11 +1656,15 @@ const RUST_HIGHLIGHT_QUERY: &str = r#"
 (function_item name: (identifier) @function)
 (call_expression function: (identifier) @function)
 (call_expression function: (field_expression field: (field_identifier) @function))
+(mutable_specifier) @keyword
+(crate) @keyword
+(super) @keyword
+(self) @keyword
 [
   "fn" "let" "pub" "struct" "impl" "use" "mod" "if" "else" "match" "for"
-  "while" "loop" "return" "mut" "const" "static" "trait" "enum" "async"
-  "await" "move" "in" "as" "ref" "where" "unsafe" "extern" "crate" "super"
-  "dyn" "break" "continue" "true" "false" "self" "Self"
+  "while" "loop" "return" "const" "static" "trait" "enum" "async"
+  "await" "move" "in" "as" "ref" "where" "unsafe" "extern"
+  "dyn" "break" "continue" "true" "false"
 ] @keyword
 "#;
 
@@ -1767,6 +1815,24 @@ mod editor_interaction_tests {
             after.height(),
             190.0,
             "output's rendered height should track set_height exactly (1:1), not half of the delta"
+        );
+    }
+
+    #[test]
+    fn plain_never_produces_highlights_even_for_rust_like_text() {
+        let editor = CodeEditor::plain().text("fn main() { let x: u32 = 1; }");
+        assert!(
+            editor.highlights.read().unwrap().is_empty(),
+            "a plain() editor should never populate highlights, regardless of content"
+        );
+    }
+
+    #[test]
+    fn new_still_highlights_rust_text_unlike_plain() {
+        let editor = CodeEditor::new().text("fn main() { let x: u32 = 1; }");
+        assert!(
+            !editor.highlights.read().unwrap().is_empty(),
+            "new() should still apply real Rust highlighting -- plain() shouldn't have changed that"
         );
     }
 }
