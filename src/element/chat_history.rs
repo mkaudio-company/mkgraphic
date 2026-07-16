@@ -79,9 +79,29 @@ struct LaidOutMessage {
     bubble: Rect,
 }
 
+/// A message's cached wrapped layout, keyed on exactly the inputs that
+/// actually determine it -- the message's own raw text and the wrap
+/// width -- never on frame count or scroll position (the anti-pattern
+/// `layout_messages`'s own doc comment warns against; that comment is
+/// about *this crate's general re-layout-every-call convention*, which
+/// is still correct for plain text -- math layout is real box-model
+/// computation, not string measurement, so it's worth caching correctly
+/// rather than not caching at all).
+struct CachedMessageLayout {
+    thinking_text: String,
+    response_text: String,
+    max_width: f32,
+    thinking_lines: Option<Vec<WrappedLine>>,
+    response_lines: Option<Vec<WrappedLine>>,
+}
+
 /// A scrollable list of chat bubbles.
 pub struct ChatHistory {
     messages: RwLock<Vec<ChatMessage>>,
+    /// Parallel-indexed to `messages` (`layout_cache.len() ==
+    /// messages.len()` always) -- see `CachedMessageLayout`'s own doc
+    /// comment for the caching rationale.
+    layout_cache: RwLock<Vec<Option<CachedMessageLayout>>>,
     scroll_offset: RwLock<f32>,
     width: f32,
     height: f32,
@@ -107,6 +127,7 @@ impl ChatHistory {
         let theme = get_theme();
         Self {
             messages: RwLock::new(Vec::new()),
+            layout_cache: RwLock::new(Vec::new()),
             scroll_offset: RwLock::new(0.0),
             width: 400.0,
             height: 300.0,
@@ -148,6 +169,7 @@ impl ChatHistory {
             .write()
             .unwrap()
             .push(ChatMessage::new(sender, text));
+        self.layout_cache.write().unwrap().push(None);
         *self.scroll_offset.write().unwrap() = f32::MAX;
     }
 
@@ -163,6 +185,7 @@ impl ChatHistory {
             .write()
             .unwrap()
             .push(ChatMessage::new(sender, ""));
+        self.layout_cache.write().unwrap().push(None);
         *self.scroll_offset.write().unwrap() = f32::MAX;
     }
 
@@ -190,6 +213,7 @@ impl ChatHistory {
     /// Removes every message and resets scroll.
     pub fn clear(&self) {
         self.messages.write().unwrap().clear();
+        self.layout_cache.write().unwrap().clear();
         *self.scroll_offset.write().unwrap() = 0.0;
     }
 
@@ -244,12 +268,14 @@ impl ChatHistory {
 
     /// Lays out every message top-down, in scroll-adjusted absolute
     /// coordinates matching `ctx.bounds`, returning `(messages,
-    /// total_content_height)`. Recomputed on every call (draw/scroll/
-    /// hit-test all receive `&Context`, which carries the `Canvas`
-    /// measurement needs) rather than cached against message count or
-    /// width -- chat histories are small, and a cache keyed on the wrong
-    /// invalidation condition is exactly the `VTile::bounds_of` bug class
-    /// this session already hit once.
+    /// total_content_height)`. Called on every draw/scroll/hit-test (all
+    /// receive `&Context`, which carries the `Canvas` measurement needs),
+    /// but each message's actual Markdown parse + wrap + math layout is
+    /// only *recomputed* when `layout_cache`'s snapshot of that message's
+    /// text/width is stale -- see `CachedMessageLayout`'s own doc comment
+    /// for why this is a real cache (keyed on content, not frame/scroll
+    /// state), unlike the general "just recompute, chat histories are
+    /// small" stance the rest of this crate takes for plain text.
     ///
     /// As a side effect, self-corrects `scroll_offset` against the fresh
     /// `total_content_height` (clamping it into a valid range) -- this is
@@ -265,35 +291,58 @@ impl ChatHistory {
         {
             let mut canvas = ctx.canvas.borrow_mut();
             canvas.font_size(self.font_size);
+            let mut cache = self.layout_cache.write().unwrap();
+            debug_assert_eq!(cache.len(), messages.len(), "layout_cache must stay parallel-indexed to messages");
 
-            for msg in messages.iter() {
-                // The "Thinking" label is folded into `thinking_lines` as
-                // its own first line rather than tracked separately --
-                // draw_messages then just draws whatever's in
-                // `thinking_lines` uniformly, no special-cased label draw.
-                let thinking_lines =
-                    Self::wrap_markdown(&mut canvas, &msg.thinking, max_text_width, true).map(
-                        |mut lines| {
-                            canvas.font_size(self.font_size);
-                            let metrics = canvas.font_metrics();
-                            lines.insert(
-                                0,
-                                WrappedLine {
-                                    runs: vec![LaidOutRun::Text(TextRun {
-                                        text: "Thinking".to_string(),
-                                        bold: false,
-                                        italic: true,
-                                        monospace: false,
-                                    })],
-                                    height: metrics.ascent,
-                                    depth: metrics.descent,
-                                },
-                            );
-                            lines
-                        },
-                    );
-                let response_lines =
-                    Self::wrap_markdown(&mut canvas, &msg.response, max_text_width, false);
+            for (i, msg) in messages.iter().enumerate() {
+                let cache_hit = cache.get(i).and_then(|slot| slot.as_ref()).is_some_and(|c| {
+                    c.thinking_text == msg.thinking && c.response_text == msg.response && c.max_width == max_text_width
+                });
+
+                if !cache_hit {
+                    // The "Thinking" label is folded into `thinking_lines`
+                    // as its own first line rather than tracked
+                    // separately -- draw_messages then just draws
+                    // whatever's in `thinking_lines` uniformly, no
+                    // special-cased label draw.
+                    let thinking_lines =
+                        Self::wrap_markdown(&mut canvas, &msg.thinking, max_text_width, true).map(
+                            |mut lines| {
+                                canvas.font_size(self.font_size);
+                                let metrics = canvas.font_metrics();
+                                lines.insert(
+                                    0,
+                                    WrappedLine {
+                                        runs: vec![LaidOutRun::Text(TextRun {
+                                            text: "Thinking".to_string(),
+                                            bold: false,
+                                            italic: true,
+                                            monospace: false,
+                                        })],
+                                        height: metrics.ascent,
+                                        depth: metrics.descent,
+                                    },
+                                );
+                                lines
+                            },
+                        );
+                    let response_lines =
+                        Self::wrap_markdown(&mut canvas, &msg.response, max_text_width, false);
+
+                    if i < cache.len() {
+                        cache[i] = Some(CachedMessageLayout {
+                            thinking_text: msg.thinking.clone(),
+                            response_text: msg.response.clone(),
+                            max_width: max_text_width,
+                            thinking_lines,
+                            response_lines,
+                        });
+                    }
+                }
+
+                let cached = cache[i].as_ref().unwrap();
+                let thinking_lines = cached.thinking_lines.clone();
+                let response_lines = cached.response_lines.clone();
 
                 let thinking_height = thinking_lines.as_ref().map_or(0.0, |l| {
                     markdown::measure_wrapped_height(&mut canvas, l, self.font_size)
