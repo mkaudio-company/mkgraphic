@@ -106,7 +106,9 @@ impl MarkdownView {
         canvas.font_size(self.font_size);
 
         let mut cache = self.layout_cache.write().unwrap();
-        let cache_hit = cache.as_ref().is_some_and(|(t, w, _)| *t == text && *w == max_width);
+        let cache_hit = cache
+            .as_ref()
+            .is_some_and(|(t, w, _)| *t == text && *w == max_width);
         if !cache_hit {
             let lines = if text.is_empty() {
                 Vec::new()

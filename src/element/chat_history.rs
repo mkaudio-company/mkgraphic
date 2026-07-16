@@ -292,12 +292,21 @@ impl ChatHistory {
             let mut canvas = ctx.canvas.borrow_mut();
             canvas.font_size(self.font_size);
             let mut cache = self.layout_cache.write().unwrap();
-            debug_assert_eq!(cache.len(), messages.len(), "layout_cache must stay parallel-indexed to messages");
+            debug_assert_eq!(
+                cache.len(),
+                messages.len(),
+                "layout_cache must stay parallel-indexed to messages"
+            );
 
             for (i, msg) in messages.iter().enumerate() {
-                let cache_hit = cache.get(i).and_then(|slot| slot.as_ref()).is_some_and(|c| {
-                    c.thinking_text == msg.thinking && c.response_text == msg.response && c.max_width == max_text_width
-                });
+                let cache_hit = cache
+                    .get(i)
+                    .and_then(|slot| slot.as_ref())
+                    .is_some_and(|c| {
+                        c.thinking_text == msg.thinking
+                            && c.response_text == msg.response
+                            && c.max_width == max_text_width
+                    });
 
                 if !cache_hit {
                     // The "Thinking" label is folded into `thinking_lines`

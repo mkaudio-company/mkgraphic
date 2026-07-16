@@ -75,7 +75,10 @@ pub struct MathRun {
 #[derive(Debug, Clone)]
 pub enum LaidOutRun {
     Text(TextRun),
-    Math { source: String, layout: Arc<MathBox> },
+    Math {
+        source: String,
+        layout: Arc<MathBox>,
+    },
 }
 
 /// One wrapped display line, with its own real height/depth (the max
