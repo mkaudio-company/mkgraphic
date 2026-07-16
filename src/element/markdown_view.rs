@@ -28,6 +28,12 @@ use std::sync::RwLock;
 /// A scrollable Markdown document viewer.
 pub struct MarkdownView {
     text: RwLock<String>,
+    /// Cached wrapped layout for the current `(text, max_width)` --
+    /// unlike `ChatHistory`'s per-message cache, this only ever needs one
+    /// slot since a `MarkdownView` shows exactly one document at a time.
+    /// See `chat_history.rs`'s `CachedMessageLayout` for the same
+    /// content-keyed (never frame/scroll-keyed) caching rationale.
+    layout_cache: RwLock<Option<(String, f32, Vec<WrappedLine>)>>,
     scroll_offset: RwLock<f32>,
     width: f32,
     height: f32,
@@ -44,6 +50,7 @@ impl MarkdownView {
         let theme = get_theme();
         Self {
             text: RwLock::new(String::new()),
+            layout_cache: RwLock::new(None),
             scroll_offset: RwLock::new(0.0),
             width: 400.0,
             height: 300.0,
@@ -97,12 +104,20 @@ impl MarkdownView {
 
         let mut canvas = ctx.canvas.borrow_mut();
         canvas.font_size(self.font_size);
-        let lines = if text.is_empty() {
-            Vec::new()
-        } else {
-            let runs = markdown::markdown_to_runs(&text);
-            markdown::wrap_runs(&mut canvas, &runs, max_width)
-        };
+
+        let mut cache = self.layout_cache.write().unwrap();
+        let cache_hit = cache.as_ref().is_some_and(|(t, w, _)| *t == text && *w == max_width);
+        if !cache_hit {
+            let lines = if text.is_empty() {
+                Vec::new()
+            } else {
+                let runs = markdown::markdown_to_runs(&text);
+                markdown::wrap_runs(&mut canvas, &runs, max_width)
+            };
+            *cache = Some((text, max_width, lines));
+        }
+        let lines = cache.as_ref().unwrap().2.clone();
+        drop(cache);
 
         let total_height = markdown::measure_wrapped_height(&mut canvas, &lines, self.font_size)
             + 2.0 * self.padding;

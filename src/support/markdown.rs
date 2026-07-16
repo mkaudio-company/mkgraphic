@@ -24,7 +24,7 @@
 //! own API (`current_font` is just mutable draw state) but exercises it
 //! for the first time.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -65,7 +65,7 @@ pub struct MathRun {
     /// `$$...$$` (display) vs `$...$` (inline) -- controls
     /// [`math::style::MathStyle::Display`] vs `Text` at layout time.
     pub display: bool,
-    pub ast: Rc<math::ast::MathNode>,
+    pub ast: Arc<math::ast::MathNode>,
 }
 
 /// A run that's been through [`wrap_runs`] -- text runs are unchanged,
@@ -75,7 +75,7 @@ pub struct MathRun {
 #[derive(Debug, Clone)]
 pub enum LaidOutRun {
     Text(TextRun),
-    Math { source: String, layout: Rc<MathBox> },
+    Math { source: String, layout: Arc<MathBox> },
 }
 
 /// One wrapped display line, with its own real height/depth (the max
@@ -157,7 +157,7 @@ pub fn markdown_to_runs(source: &str) -> Vec<Vec<StyledRun>> {
                 Ok(node) => lines.last_mut().unwrap().push(StyledRun::Math(MathRun {
                     source: tex.to_string(),
                     display,
-                    ast: Rc::new(node),
+                    ast: Arc::new(node),
                 })),
                 Err(_) => {
                     let delim = if display { "$$" } else { "$" };
@@ -307,7 +307,7 @@ pub fn wrap_runs(
                     }
                     current.push(LaidOutRun::Math {
                         source: math_run.source.clone(),
-                        layout: Rc::new(math_box),
+                        layout: Arc::new(math_box),
                     });
                     current_width += width;
                 }
@@ -647,7 +647,7 @@ mod tests {
             StyledRun::Math(MathRun {
                 source: "x^2".to_string(),
                 display: false,
-                ast: Rc::new(math::parser::parse_math("x^2").unwrap()),
+                ast: Arc::new(math::parser::parse_math("x^2").unwrap()),
             }),
         ]];
         let wrapped = wrap_runs(&mut canvas, &lines, 10_000.0);
@@ -669,7 +669,7 @@ mod tests {
         let lines = vec![vec![StyledRun::Math(MathRun {
             source: "\\frac{1}{2}".to_string(),
             display: true,
-            ast: Rc::new(math::parser::parse_math("\\frac{1}{2}").unwrap()),
+            ast: Arc::new(math::parser::parse_math("\\frac{1}{2}").unwrap()),
         })]];
         let wrapped = wrap_runs(&mut canvas, &lines, 10_000.0);
         assert!(

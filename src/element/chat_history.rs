@@ -864,4 +864,39 @@ mod tests {
         let (_, total_height) = history.layout_messages(&ctx);
         assert_eq!(*history.scroll_offset.read().unwrap(), total_height - 80.0);
     }
+
+    #[test]
+    fn a_second_layout_call_with_unchanged_text_reuses_the_cached_wrapped_lines() {
+        let history = ChatHistory::new().width(300.0).height(200.0);
+        history.push_message(ChatSender::Assistant, "$\\frac{1}{2}$ and some more text");
+
+        let view = View::new(Extent::new(300.0, 200.0));
+        let canvas = std::cell::RefCell::new(Canvas::new(300, 200).unwrap());
+        let bounds = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let ctx = Context::new(&view, &canvas, bounds);
+
+        let (first, _) = history.layout_messages(&ctx);
+        let (second, _) = history.layout_messages(&ctx);
+
+        let first_math = first[0].response_lines.iter().find_map(|line| {
+            line.runs.iter().find_map(|r| match r {
+                LaidOutRun::Math { layout, .. } => Some(layout.clone()),
+                LaidOutRun::Text(_) => None,
+            })
+        });
+        let second_math = second[0].response_lines.iter().find_map(|line| {
+            line.runs.iter().find_map(|r| match r {
+                LaidOutRun::Math { layout, .. } => Some(layout.clone()),
+                LaidOutRun::Text(_) => None,
+            })
+        });
+
+        let (Some(first_math), Some(second_math)) = (first_math, second_math) else {
+            panic!("expected a math run in the response");
+        };
+        assert!(
+            std::sync::Arc::ptr_eq(&first_math, &second_math),
+            "expected the second layout_messages call to reuse the cached MathBox, not recompute it"
+        );
+    }
 }
