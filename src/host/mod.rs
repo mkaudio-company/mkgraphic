@@ -14,6 +14,8 @@ mod linux;
 
 #[cfg(target_os = "macos")]
 pub use macos::{choose_file_to_open, choose_file_to_save, choose_folder, MacOSApp, MacOSWindow};
+#[cfg(target_os = "macos")]
+use macos::{get_clipboard as platform_get_clipboard, set_clipboard as platform_set_clipboard};
 
 #[cfg(target_os = "windows")]
 pub use self::windows::{WindowsApp, WindowsTimer, WindowsWindow};
@@ -27,6 +29,35 @@ use crate::view::View;
 
 #[cfg(target_os = "macos")]
 use objc2_foundation::MainThreadMarker;
+
+/// Reads the system clipboard's plain-text contents, or an empty string
+/// if it holds none (empty, or a non-text item) -- macOS-only for now
+/// (real `NSPasteboard` read); Windows/Linux have no clipboard backend
+/// wired up yet, so this always returns empty there.
+pub fn get_clipboard() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        platform_get_clipboard()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        String::new()
+    }
+}
+
+/// Writes `text` to the system clipboard, replacing its previous
+/// contents -- macOS-only for now (real `NSPasteboard` write);
+/// Windows/Linux silently do nothing.
+pub fn set_clipboard(text: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        platform_set_clipboard(text);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = text;
+    }
+}
 
 /// Window position.
 #[derive(Debug, Clone, Copy)]

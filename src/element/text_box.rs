@@ -429,6 +429,45 @@ impl TextBox {
         *self.cursor_pos.write().unwrap() = char_count;
     }
 
+    /// Copies the current selection to the system clipboard, if any.
+    fn copy_selection(&self) {
+        let Some(sel_start) = *self.selection_start.read().unwrap() else {
+            return;
+        };
+        let cursor_pos = *self.cursor_pos.read().unwrap();
+        let start = sel_start.min(cursor_pos);
+        let end = sel_start.max(cursor_pos);
+        let selected: String = self
+            .text
+            .read()
+            .unwrap()
+            .chars()
+            .skip(start)
+            .take(end - start)
+            .collect();
+        crate::host::set_clipboard(&selected);
+    }
+
+    /// Copies the current selection (if any) then deletes it -- `Some`
+    /// selection start makes `delete_backward` remove exactly the
+    /// selection, same as a plain Delete/Backspace on a selection would.
+    fn cut_selection(&self) {
+        if self.selection_start.read().unwrap().is_none() {
+            return;
+        }
+        self.copy_selection();
+        self.delete_backward();
+    }
+
+    /// Inserts the clipboard's text at the cursor, replacing the current
+    /// selection if any (`insert_text` already does this).
+    fn paste_clipboard(&self) {
+        let text = crate::host::get_clipboard();
+        if !text.is_empty() {
+            self.insert_text(&text);
+        }
+    }
+
     fn draw_background(&self, ctx: &Context) {
         let mut canvas = ctx.canvas.borrow_mut();
         let state = *self.state.read().unwrap();
@@ -773,6 +812,24 @@ impl Element for TextBox {
             }
             KeyCode::A if ctrl => {
                 self.select_all();
+                return true;
+            }
+            KeyCode::C if ctrl => {
+                self.copy_selection();
+                return true;
+            }
+            KeyCode::X if ctrl => {
+                self.cut_selection();
+                if let Some(ref callback) = self.on_change {
+                    callback(&self.get_text());
+                }
+                return true;
+            }
+            KeyCode::V if ctrl => {
+                self.paste_clipboard();
+                if let Some(ref callback) = self.on_change {
+                    callback(&self.get_text());
+                }
                 return true;
             }
             _ => {}

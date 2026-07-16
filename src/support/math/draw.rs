@@ -78,11 +78,13 @@ fn draw_rule(
                 canvas,
                 *kind,
                 *is_open,
-                top_left,
-                math_box.width,
-                math_box.height + math_box.depth,
-                *thickness,
-                color,
+                super::delimiter::DelimiterGeometry {
+                    origin: top_left,
+                    width: math_box.width,
+                    height: math_box.height + math_box.depth,
+                    thickness: *thickness,
+                    color,
+                },
             );
         }
     }

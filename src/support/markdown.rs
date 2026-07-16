@@ -251,6 +251,15 @@ pub fn wrap_runs(
     lines: &[Vec<StyledRun>],
     max_width: f32,
 ) -> Vec<WrappedLine> {
+    // Captured once, restored after every math run below -- `layout_math`
+    // sets `canvas`'s font size to whatever its smallest-drawn glyph
+    // needs (fraction/script sub-parts are smaller than running text),
+    // and never restores it. Without resetting it back to this base
+    // before measuring the next text run's width, every text piece after
+    // the first math run on a line would be measured at that leftover
+    // (too-small) size, throwing off wrap points even though `draw_runs`
+    // draws that same text at the correct size.
+    let base_font_size = canvas.current_font_size();
     let mut out = Vec::new();
 
     for line in lines {
@@ -269,6 +278,7 @@ pub fn wrap_runs(
         for run in line {
             match run {
                 StyledRun::Text(text_run) => {
+                    canvas.font_size(base_font_size);
                     canvas.font(run_font(text_run));
                     for (word_index, word) in text_run.text.split(' ').enumerate() {
                         let piece = if word_index > 0 {
@@ -299,9 +309,14 @@ pub fn wrap_runs(
                     } else {
                         math::style::MathStyle::Text
                     };
-                    let font_size = canvas.current_font_size();
                     let math_box =
-                        math::layout::layout_math(&math_run.ast, style, font_size, canvas);
+                        math::layout::layout_math(&math_run.ast, style, base_font_size, canvas);
+                    // `layout_math` leaves `canvas`'s font size at
+                    // whatever its smallest sub-part needed -- restore it
+                    // so a later math run on this same line (or the width
+                    // measurement below, transitively) reads the real
+                    // base size, not a leftover smaller one.
+                    canvas.font_size(base_font_size);
                     let width = math_box.width;
 
                     if current_width > 0.0 && current_width + width > max_width {
@@ -426,6 +441,12 @@ pub fn draw_runs(
         for run in &line.runs {
             match run {
                 LaidOutRun::Text(text_run) => {
+                    // A preceding math run on this same line (fractions,
+                    // scripts, ...) leaves `canvas`'s font size at
+                    // whatever its smallest-drawn glyph used -- text runs
+                    // are always `base_font_size` in this renderer, so
+                    // reset it explicitly rather than inheriting that.
+                    canvas.font_size(base_font_size);
                     canvas.font(run_font(text_run));
                     canvas.fill_text(&text_run.text, Point::new(x, baseline));
                     x += canvas.text_width(&text_run.text);
@@ -682,6 +703,49 @@ mod tests {
         assert!(
             wrapped[0].depth > 0.0,
             "expected a real, non-zero depth from the fraction's own box metrics"
+        );
+    }
+
+    #[test]
+    fn text_following_inline_math_is_measured_at_the_base_font_size_not_a_leftover_script_size() {
+        // Regression test: `layout_math` leaves `canvas`'s font size at
+        // whatever its smallest sub-part (e.g. a fraction's denominator)
+        // needed, and previously nothing restored it before measuring the
+        // next text run -- wrapping a word after inline math would
+        // measure it too small, and `draw_runs` would later draw it too
+        // small as well (the bug this test guards against).
+        let mut canvas = Canvas::new(400, 400).unwrap();
+        canvas.font_size(20.0);
+        let base_width = canvas.text_width("corresponds");
+
+        let lines = vec![vec![
+            StyledRun::Math(MathRun {
+                source: "\\frac{1}{2}".to_string(),
+                display: false,
+                ast: Arc::new(math::parser::parse_math("\\frac{1}{2}").unwrap()),
+            }),
+            text("corresponds"),
+        ]];
+        let wrapped = wrap_runs(&mut canvas, &lines, 10_000.0);
+
+        let LaidOutRun::Text(after_math) = wrapped[0]
+            .runs
+            .iter()
+            .find(|r| matches!(r, LaidOutRun::Text(_)))
+            .expect("expected a text run after the math run")
+        else {
+            unreachable!()
+        };
+        assert_eq!(after_math.text, "corresponds");
+        assert_eq!(
+            canvas.current_font_size(),
+            20.0,
+            "canvas font size should be restored to the base size after laying out math"
+        );
+        canvas.font(run_font(after_math));
+        assert!(
+            (canvas.text_width(&after_math.text) - base_width).abs() < 0.01,
+            "text after inline math should measure the same as it would at the base font size"
         );
     }
 }

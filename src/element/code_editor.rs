@@ -861,6 +861,38 @@ impl CodeEditor {
         }
     }
 
+    /// Copies the current selection to the system clipboard, if any --
+    /// a no-op with nothing selected (matches every other text editor's
+    /// Cmd+C behavior of leaving the clipboard untouched rather than
+    /// clearing it).
+    fn copy_selection(&self) {
+        let anchor = *self.selection_anchor.read().unwrap();
+        let Some(sel) = anchor else { return };
+        let lines = self.lines.read().unwrap();
+        let cursor = *self.cursor.read().unwrap();
+        crate::host::set_clipboard(&extract_range(&lines, sel, cursor));
+    }
+
+    /// Copies the current selection (if any) then deletes it -- `Some`
+    /// anchor makes `delete_backward` remove exactly the selection, same
+    /// as a plain Delete/Backspace on a selection would.
+    fn cut_selection(&self) {
+        if self.selection_anchor.read().unwrap().is_none() {
+            return;
+        }
+        self.copy_selection();
+        self.delete_backward();
+    }
+
+    /// Inserts the clipboard's text at the cursor, replacing the current
+    /// selection if any (`insert_text` already does this).
+    fn paste_clipboard(&self) {
+        let text = crate::host::get_clipboard();
+        if !text.is_empty() {
+            self.insert_text(&text);
+        }
+    }
+
     /// Highest-severity diagnostic on `line`, if any (a line with both an
     /// error and a warning shows the error marker, since that's the more
     /// actionable of the two).
@@ -1616,6 +1648,9 @@ impl Element for CodeEditor {
             KeyCode::Z if ctrl && shift => self.redo(),
             KeyCode::Z if ctrl => self.undo(),
             KeyCode::Y if ctrl => self.redo(),
+            KeyCode::C if ctrl => self.copy_selection(),
+            KeyCode::X if ctrl => self.cut_selection(),
+            KeyCode::V if ctrl => self.paste_clipboard(),
             _ => return false,
         }
         // Without this, moving the cursor past whatever's currently
@@ -1700,6 +1735,36 @@ const RUST_KEYWORDS: &[&str] = &[
     "while", "async", "await", "dyn", "String", "Vec", "Option", "Some", "None", "Result", "Ok",
     "Err", "Arc", "RwLock", "Mutex", "Box",
 ];
+
+/// Returns the text within the (line, column)-addressed range `[a, b)`
+/// (order-independent), for copy/cut -- mirrors `delete_range_inner`'s own
+/// range math but reads instead of mutating.
+fn extract_range(lines: &[String], a: CursorPos, b: CursorPos) -> String {
+    let (start, end) = if (a.line, a.column) <= (b.line, b.column) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+
+    if start.line == end.line {
+        let line = &lines[start.line];
+        let sb = char_to_byte(line, start.column);
+        let eb = char_to_byte(line, end.column);
+        line[sb..eb].to_string()
+    } else {
+        let mut out = String::new();
+        let start_byte = char_to_byte(&lines[start.line], start.column);
+        out.push_str(&lines[start.line][start_byte..]);
+        for line in &lines[start.line + 1..end.line] {
+            out.push('\n');
+            out.push_str(line);
+        }
+        let end_byte = char_to_byte(&lines[end.line], end.column);
+        out.push('\n');
+        out.push_str(&lines[end.line][..end_byte]);
+        out
+    }
+}
 
 /// Deletes the (line, column)-addressed range `[a, b)` (order-independent)
 /// from `lines` in place, and sets `*cursor` to the range's start.
@@ -2359,5 +2424,26 @@ mod editor_interaction_tests {
             Some(start_cursor),
             "a later shift-click should keep extending from the same original anchor, not move it"
         );
+    }
+
+    #[test]
+    fn extract_range_reads_a_single_line_span() {
+        let lines = vec!["hello world".to_string()];
+        let a = CursorPos { line: 0, column: 6 };
+        let b = CursorPos {
+            line: 0,
+            column: 11,
+        };
+        assert_eq!(extract_range(&lines, a, b), "world");
+        // Order-independent, same as `delete_range_inner`.
+        assert_eq!(extract_range(&lines, b, a), "world");
+    }
+
+    #[test]
+    fn extract_range_reads_a_multi_line_span() {
+        let lines = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let a = CursorPos { line: 0, column: 1 };
+        let b = CursorPos { line: 2, column: 3 };
+        assert_eq!(extract_range(&lines, a, b), "ne\ntwo\nthr");
     }
 }

@@ -10,25 +10,40 @@ use crate::support::point::Point;
 
 use super::ast::DelimiterKind;
 
-/// Draws `kind` inside the box `[origin.x, origin.y] .. [origin.x +
-/// width, origin.y + height]` (top-left origin, screen Y down), stroked
-/// at `thickness`. `is_open` mirrors every shape below horizontally
-/// (just by swapping which of `left`/`right` is numerically which,
-/// since every shape is defined purely in terms of those two plus
-/// `top`/`bottom`/`mid`) -- except `AngleLeft`/`AngleRight`, `Bar`, and
-/// `DoubleBar`, which are either already direction-specific via their own
-/// `DelimiterKind` or symmetric, so mirroring them would be a no-op or
-/// wrong.
+/// The box `[origin.x, origin.y] .. [origin.x + width, origin.y +
+/// height]` (top-left origin, screen Y down) a delimiter is drawn into,
+/// plus its stroke style -- grouped into one struct purely to keep
+/// `draw_delimiter`'s own argument count down, not because these five
+/// values have any meaning independent of each other.
+#[derive(Clone, Copy)]
+pub struct DelimiterGeometry {
+    pub origin: Point,
+    pub width: f32,
+    pub height: f32,
+    pub thickness: f32,
+    pub color: Color,
+}
+
+/// Draws `kind` inside `geometry`'s box, stroked at `geometry.thickness`.
+/// `is_open` mirrors every shape below horizontally (just by swapping
+/// which of `left`/`right` is numerically which, since every shape is
+/// defined purely in terms of those two plus `top`/`bottom`/`mid`) --
+/// except `AngleLeft`/`AngleRight`, `Bar`, and `DoubleBar`, which are
+/// either already direction-specific via their own `DelimiterKind` or
+/// symmetric, so mirroring them would be a no-op or wrong.
 pub fn draw_delimiter(
     canvas: &mut Canvas,
     kind: DelimiterKind,
     is_open: bool,
-    origin: Point,
-    width: f32,
-    height: f32,
-    thickness: f32,
-    color: Color,
+    geometry: DelimiterGeometry,
 ) {
+    let DelimiterGeometry {
+        origin,
+        width,
+        height,
+        thickness,
+        color,
+    } = geometry;
     canvas.stroke_style(color);
     canvas.line_width(thickness);
     let top = origin.y;

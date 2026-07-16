@@ -199,20 +199,29 @@ pub fn set_cursor(cursor: CursorType) {
     }
 }
 
-/// Gets the clipboard contents.
+/// Gets the clipboard contents, or an empty string if the pasteboard
+/// holds no plain-text item (e.g. it's empty, or holds an image/file
+/// instead).
 pub fn get_clipboard() -> String {
     unsafe {
-        let _pasteboard = NSPasteboard::generalPasteboard();
-        // Would need to read string from pasteboard
-        String::new()
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard
+            .stringForType(objc2_app_kit::NSPasteboardTypeString)
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     }
 }
 
-/// Sets the clipboard contents.
-pub fn set_clipboard(_text: &str) {
+/// Sets the clipboard contents, replacing whatever the pasteboard held
+/// before (matches every other app's copy/cut behavior -- a paste
+/// afterward should only ever see this text, not some leftover image or
+/// file reference from a previous copy).
+pub fn set_clipboard(text: &str) {
     unsafe {
-        let _pasteboard = NSPasteboard::generalPasteboard();
-        // Would need to write string to pasteboard
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let string = NSString::from_str(text);
+        pasteboard.setString_forType(&string, objc2_app_kit::NSPasteboardTypeString);
     }
 }
 
