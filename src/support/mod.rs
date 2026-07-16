@@ -15,6 +15,7 @@ pub mod circle;
 pub mod color;
 pub mod font;
 pub mod markdown;
+pub mod math;
 pub mod payload;
 pub mod point;
 pub mod rect;

@@ -28,7 +28,8 @@ use super::context::{BasicContext, Context};
 use super::{Element, ViewLimits, ViewStretch};
 use crate::support::canvas::Canvas;
 use crate::support::color::Color;
-use crate::support::markdown::{self, StyledRun};
+use crate::support::markdown::{self, LaidOutRun, StyledRun, TextRun, WrappedLine};
+use crate::support::math;
 use crate::support::point::Point;
 use crate::support::rect::Rect;
 use crate::support::theme::get_theme;
@@ -73,8 +74,8 @@ impl ChatMessage {
 /// an empty label.
 struct LaidOutMessage {
     sender: ChatSender,
-    thinking_lines: Vec<Vec<StyledRun>>,
-    response_lines: Vec<Vec<StyledRun>>,
+    thinking_lines: Vec<WrappedLine>,
+    response_lines: Vec<WrappedLine>,
     bubble: Rect,
 }
 
@@ -192,10 +193,6 @@ impl ChatHistory {
         *self.scroll_offset.write().unwrap() = 0.0;
     }
 
-    fn line_height(&self) -> f32 {
-        self.font_size * 1.3
-    }
-
     fn max_text_width(&self) -> f32 {
         (self.width * self.bubble_max_width_ratio - 2.0 * self.bubble_padding).max(20.0)
     }
@@ -210,7 +207,7 @@ impl ChatHistory {
         text: &str,
         max_width: f32,
         force_italic: bool,
-    ) -> Option<Vec<Vec<StyledRun>>> {
+    ) -> Option<Vec<WrappedLine>> {
         if text.is_empty() {
             return None;
         }
@@ -218,21 +215,27 @@ impl ChatHistory {
         if force_italic {
             for line in &mut runs {
                 for run in line.iter_mut() {
-                    run.italic = true;
+                    if let StyledRun::Text(text_run) = run {
+                        text_run.italic = true;
+                    }
                 }
             }
         }
         Some(markdown::wrap_runs(canvas, &runs, max_width))
     }
 
-    fn measure_lines_width(canvas: &mut Canvas, lines: &[Vec<StyledRun>]) -> f32 {
+    fn measure_lines_width(canvas: &mut Canvas, lines: &[WrappedLine]) -> f32 {
         lines
             .iter()
             .map(|line| {
-                line.iter()
-                    .map(|run| {
-                        canvas.font(markdown::run_font(run));
-                        canvas.text_width(&run.text)
+                line.runs
+                    .iter()
+                    .map(|run| match run {
+                        LaidOutRun::Text(text_run) => {
+                            canvas.font(markdown::run_font(text_run));
+                            canvas.text_width(&text_run.text)
+                        }
+                        LaidOutRun::Math { layout, .. } => layout.width,
                     })
                     .sum::<f32>()
             })
@@ -254,7 +257,6 @@ impl ChatHistory {
     /// bottom" sentinel into a real position.
     fn layout_messages(&self, ctx: &Context) -> (Vec<LaidOutMessage>, f32) {
         let messages = self.messages.read().unwrap();
-        let line_height = self.line_height();
         let max_text_width = self.max_text_width();
 
         let mut out = Vec::with_capacity(messages.len());
@@ -272,14 +274,20 @@ impl ChatHistory {
                 let thinking_lines =
                     Self::wrap_markdown(&mut canvas, &msg.thinking, max_text_width, true).map(
                         |mut lines| {
+                            canvas.font_size(self.font_size);
+                            let metrics = canvas.font_metrics();
                             lines.insert(
                                 0,
-                                vec![StyledRun {
-                                    text: "Thinking".to_string(),
-                                    bold: false,
-                                    italic: true,
-                                    monospace: false,
-                                }],
+                                WrappedLine {
+                                    runs: vec![LaidOutRun::Text(TextRun {
+                                        text: "Thinking".to_string(),
+                                        bold: false,
+                                        italic: true,
+                                        monospace: false,
+                                    })],
+                                    height: metrics.ascent,
+                                    depth: metrics.descent,
+                                },
                             );
                             lines
                         },
@@ -287,12 +295,12 @@ impl ChatHistory {
                 let response_lines =
                     Self::wrap_markdown(&mut canvas, &msg.response, max_text_width, false);
 
-                let thinking_height = thinking_lines
-                    .as_ref()
-                    .map_or(0.0, |l| l.len() as f32 * line_height);
-                let response_height = response_lines
-                    .as_ref()
-                    .map_or(0.0, |l| l.len() as f32 * line_height);
+                let thinking_height = thinking_lines.as_ref().map_or(0.0, |l| {
+                    markdown::measure_wrapped_height(&mut canvas, l, self.font_size)
+                });
+                let response_height = response_lines.as_ref().map_or(0.0, |l| {
+                    markdown::measure_wrapped_height(&mut canvas, l, self.font_size)
+                });
                 let section_gap = if thinking_lines.is_some() && response_lines.is_some() {
                     self.gap * 0.5
                 } else {
@@ -371,7 +379,6 @@ impl ChatHistory {
     fn draw_messages(&self, ctx: &Context, messages: &[LaidOutMessage]) {
         let mut canvas = ctx.canvas.borrow_mut();
         canvas.font_size(self.font_size);
-        let line_height = self.line_height();
 
         for msg in messages {
             if msg.bubble.bottom < ctx.bounds.top || msg.bubble.top > ctx.bounds.bottom {
@@ -385,23 +392,47 @@ impl ChatHistory {
                     // `thinking` -- only `response_lines` is ever
                     // populated for them, but each line is still centered
                     // per-line rather than left-aligned like a bubble.
+                    let leading = {
+                        canvas.font_size(self.font_size);
+                        canvas.font_metrics().leading.max(self.font_size * 0.2)
+                    };
                     let mut y = msg.bubble.top + self.font_size * 0.85;
                     for line in &msg.response_lines {
+                        canvas.font_size(self.font_size);
+                        let text_metrics = canvas.font_metrics();
                         let width: f32 = line
+                            .runs
                             .iter()
-                            .map(|run| {
-                                canvas.font(markdown::run_font(run));
-                                canvas.text_width(&run.text)
+                            .map(|run| match run {
+                                LaidOutRun::Text(text_run) => {
+                                    canvas.font(markdown::run_font(text_run));
+                                    canvas.text_width(&text_run.text)
+                                }
+                                LaidOutRun::Math { layout, .. } => layout.width,
                             })
                             .sum();
                         canvas.fill_style(self.system_text_color);
                         let mut x = msg.bubble.left + (msg.bubble.width() - width) * 0.5;
-                        for run in line {
-                            canvas.font(markdown::run_font(run));
-                            canvas.fill_text(&run.text, Point::new(x, y));
-                            x += canvas.text_width(&run.text);
+                        let baseline = y + line.height.max(text_metrics.ascent);
+                        for run in &line.runs {
+                            match run {
+                                LaidOutRun::Text(text_run) => {
+                                    canvas.font(markdown::run_font(text_run));
+                                    canvas.fill_text(&text_run.text, Point::new(x, baseline));
+                                    x += canvas.text_width(&text_run.text);
+                                }
+                                LaidOutRun::Math { layout, .. } => {
+                                    math::draw::draw_math_box(
+                                        &mut canvas,
+                                        layout,
+                                        Point::new(x, baseline),
+                                        self.system_text_color,
+                                    );
+                                    x += layout.width;
+                                }
+                            }
                         }
-                        y += line_height;
+                        y = baseline + line.depth.max(text_metrics.descent) + leading;
                     }
                 }
                 ChatSender::User | ChatSender::Assistant => {
@@ -420,10 +451,14 @@ impl ChatHistory {
                             &mut canvas,
                             &msg.thinking_lines,
                             Point::new(msg.bubble.left + self.bubble_padding, y),
-                            line_height,
+                            self.font_size,
                             self.thinking_text_color,
                         );
-                        y += msg.thinking_lines.len() as f32 * line_height;
+                        y += markdown::measure_wrapped_height(
+                            &mut canvas,
+                            &msg.thinking_lines,
+                            self.font_size,
+                        );
                         if !msg.response_lines.is_empty() {
                             y += self.gap * 0.5;
                         }
@@ -433,7 +468,7 @@ impl ChatHistory {
                             &mut canvas,
                             &msg.response_lines,
                             Point::new(msg.bubble.left + self.bubble_padding, y),
-                            line_height,
+                            self.font_size,
                             text_color,
                         );
                     }
@@ -598,16 +633,17 @@ mod tests {
         );
         for line in &lines {
             let width: f32 = line
+                .runs
                 .iter()
-                .map(|run| {
-                    canvas.font(markdown::run_font(run));
-                    canvas.text_width(&run.text)
+                .map(|run| match run {
+                    LaidOutRun::Text(text_run) => {
+                        canvas.font(markdown::run_font(text_run));
+                        canvas.text_width(&text_run.text)
+                    }
+                    LaidOutRun::Math { layout, .. } => layout.width,
                 })
                 .sum();
-            assert!(
-                width <= 101.0,
-                "line {line:?} exceeds the 100px max width ({width})"
-            );
+            assert!(width <= 101.0, "line exceeds the 100px max width ({width})");
         }
     }
 
@@ -626,7 +662,15 @@ mod tests {
 
         let rendered: Vec<String> = lines
             .iter()
-            .map(|line| line.iter().map(|r| r.text.as_str()).collect())
+            .map(|line| {
+                line.runs
+                    .iter()
+                    .map(|r| match r {
+                        LaidOutRun::Text(t) => t.text.as_str(),
+                        LaidOutRun::Math { .. } => "",
+                    })
+                    .collect()
+            })
             .collect();
         assert_eq!(rendered, vec!["line1".to_string(), "line2".to_string()]);
     }

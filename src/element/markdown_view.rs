@@ -18,7 +18,7 @@
 use super::context::{BasicContext, Context};
 use super::{Element, ViewLimits, ViewStretch};
 use crate::support::color::Color;
-use crate::support::markdown::{self, StyledRun};
+use crate::support::markdown::{self, WrappedLine};
 use crate::support::point::Point;
 use crate::support::rect::Rect;
 use crate::support::theme::get_theme;
@@ -82,10 +82,6 @@ impl MarkdownView {
         *self.text.write().unwrap() = text.into();
     }
 
-    fn line_height(&self) -> f32 {
-        self.font_size * 1.3
-    }
-
     fn max_text_width(&self) -> f32 {
         (self.width - 2.0 * self.padding).max(20.0)
     }
@@ -95,23 +91,22 @@ impl MarkdownView {
     /// translated) coordinates. As a side effect, self-corrects
     /// `scroll_offset` against the fresh height -- same convention as
     /// `ChatHistory::layout_messages`.
-    fn layout(&self, ctx: &Context) -> (Vec<Vec<StyledRun>>, f32) {
+    fn layout(&self, ctx: &Context) -> (Vec<WrappedLine>, f32) {
         let text = self.text.read().unwrap().clone();
-        let line_height = self.line_height();
         let max_width = self.max_text_width();
 
-        let lines = {
-            let mut canvas = ctx.canvas.borrow_mut();
-            canvas.font_size(self.font_size);
-            if text.is_empty() {
-                Vec::new()
-            } else {
-                let runs = markdown::markdown_to_runs(&text);
-                markdown::wrap_runs(&mut canvas, &runs, max_width)
-            }
+        let mut canvas = ctx.canvas.borrow_mut();
+        canvas.font_size(self.font_size);
+        let lines = if text.is_empty() {
+            Vec::new()
+        } else {
+            let runs = markdown::markdown_to_runs(&text);
+            markdown::wrap_runs(&mut canvas, &runs, max_width)
         };
 
-        let total_height = lines.len() as f32 * line_height + 2.0 * self.padding;
+        let total_height = markdown::measure_wrapped_height(&mut canvas, &lines, self.font_size)
+            + 2.0 * self.padding;
+        drop(canvas);
 
         let visible_height = ctx.bounds.height();
         let mut scroll = self.scroll_offset.write().unwrap();
@@ -130,16 +125,15 @@ impl MarkdownView {
         canvas.fill_rect(ctx.bounds);
     }
 
-    fn draw_content(&self, ctx: &Context, lines: &[Vec<StyledRun>], scroll: f32) {
+    fn draw_content(&self, ctx: &Context, lines: &[WrappedLine], scroll: f32) {
         let mut canvas = ctx.canvas.borrow_mut();
         canvas.font_size(self.font_size);
-        let line_height = self.line_height();
 
         let origin = Point::new(
             ctx.bounds.left + self.padding,
             ctx.bounds.top + self.padding - scroll + self.font_size * 0.85,
         );
-        markdown::draw_runs(&mut canvas, lines, origin, line_height, self.text_color);
+        markdown::draw_runs(&mut canvas, lines, origin, self.font_size, self.text_color);
     }
 
     fn draw_scrollbar(&self, ctx: &Context, total_height: f32, visible_height: f32) {

@@ -433,6 +433,25 @@ impl Canvas {
         }
     }
 
+    /// Draws a quadratic Bezier curve to `to`, using `ctrl` as the
+    /// control point. Added for `support::math`'s radical-sign hook (the
+    /// first caller needing a real curve rather than the straight-line-only
+    /// paths every other element in this codebase has used so far).
+    pub fn quad_to(&mut self, ctrl: Point, to: Point) {
+        if let Some(ref mut pb) = self.path_builder {
+            pb.quad_to(ctrl.x, ctrl.y, to.x, to.y);
+        }
+    }
+
+    /// Draws a cubic Bezier curve to `to`, using `ctrl1`/`ctrl2` as the
+    /// two control points. See `quad_to`'s doc comment for why this
+    /// exists now.
+    pub fn cubic_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) {
+        if let Some(ref mut pb) = self.path_builder {
+            pb.cubic_to(ctrl1.x, ctrl1.y, ctrl2.x, ctrl2.y, to.x, to.y);
+        }
+    }
+
     /// Draws an arc.
     pub fn arc(&mut self, center: Point, radius: f32, start_angle: f32, end_angle: f32, ccw: bool) {
         if let Some(ref mut pb) = self.path_builder {
@@ -744,6 +763,65 @@ impl Canvas {
             width,
             height: self.font_size,
         }
+    }
+
+    /// The currently selected font size (see [`Canvas::font_size`]) --
+    /// `support::math`'s layout needs this back out to size a math run at
+    /// exactly the font size the surrounding text run is using.
+    pub fn current_font_size(&self) -> f32 {
+        self.font_size
+    }
+
+    /// Real font metrics for the currently selected font (see
+    /// [`Canvas::font`]), read from the actual resolved face's
+    /// `hhea`/`OS/2` ascender/descender/line-gap -- unlike
+    /// [`Canvas::measure_text`]'s `ascent`/`descent`, which are just fixed
+    /// `0.8`/`0.2` fractions of `font_size` (fine for rough line-height
+    /// bookkeeping, but not precise enough for `support::math`'s
+    /// superscript/subscript clearance rules, which need the font's real
+    /// x-height-relative geometry). Falls back to that same synthetic
+    /// split if no face resolves at all (matching `text_width`'s own
+    /// graceful-degradation convention).
+    pub fn font_metrics(&self) -> FontMetrics {
+        let fallback = FontMetrics {
+            ascent: self.font_size * 0.8,
+            descent: self.font_size * 0.2,
+            height: self.font_size,
+            leading: self.font_size * 0.1,
+        };
+
+        static FONT_DB: OnceLock<FontDatabase> = OnceLock::new();
+        let font_db = FONT_DB.get_or_init(FontDatabase::with_system_fonts);
+
+        let Some(primary) = self.primary_font_id(font_db) else {
+            return fallback;
+        };
+
+        let mut result = fallback;
+        font_db
+            .inner()
+            .with_face_data(primary, |font_data_ref, face_index| {
+                let Ok(face) = ttf_parser::Face::parse(font_data_ref, face_index) else {
+                    return;
+                };
+                let units_per_em = face.units_per_em() as f32;
+                if units_per_em <= 0.0 {
+                    return;
+                }
+                let scale = self.font_size / units_per_em;
+                let ascent = face.ascender() as f32 * scale;
+                // `ttf_parser`'s `descender()` is negative (below the
+                // baseline); `FontMetrics::descent` is the positive extent.
+                let descent = -(face.descender() as f32) * scale;
+                let leading = face.line_gap() as f32 * scale;
+                result = FontMetrics {
+                    ascent,
+                    descent,
+                    height: ascent + descent + leading,
+                    leading,
+                };
+            });
+        result
     }
 
     /// Resolves the fontdb face matching the canvas's currently selected
@@ -1248,5 +1326,94 @@ mod text_tests {
             primary, monospace_query_id,
             "selecting a monospace font should actually query for one"
         );
+    }
+
+    #[test]
+    fn quad_to_and_cubic_to_actually_extend_the_current_path() {
+        let mut canvas = Canvas::new(200, 200).unwrap();
+        canvas.begin_path();
+        canvas.move_to(Point::new(10.0, 10.0));
+        canvas.quad_to(Point::new(50.0, 10.0), Point::new(50.0, 50.0));
+        canvas.cubic_to(
+            Point::new(50.0, 90.0),
+            Point::new(90.0, 90.0),
+            Point::new(90.0, 50.0),
+        );
+        canvas.close_path();
+        canvas.fill_style(Color::new(0.0, 0.0, 0.0, 1.0));
+        canvas.fill();
+
+        let path_builder = canvas.path_builder.take();
+        assert!(
+            path_builder.is_none(),
+            "fill() should have consumed/cleared the in-progress path"
+        );
+
+        // Re-check bounds via a fresh path built the same way, since
+        // `fill()` already consumed the one above -- `quad_to`/`cubic_to`
+        // are no-ops if `path_builder` is `None` (mirroring `line_to`'s
+        // own guard), so this also confirms they aren't silently dropped.
+        canvas.begin_path();
+        canvas.move_to(Point::new(10.0, 10.0));
+        canvas.quad_to(Point::new(50.0, 10.0), Point::new(50.0, 50.0));
+        canvas.cubic_to(
+            Point::new(50.0, 90.0),
+            Point::new(90.0, 90.0),
+            Point::new(90.0, 50.0),
+        );
+        let path = canvas
+            .path_builder
+            .as_ref()
+            .unwrap()
+            .clone()
+            .finish()
+            .expect("path should be buildable");
+        let bounds = path.bounds();
+        assert!(
+            bounds.width() > 1.0 && bounds.height() > 1.0,
+            "expected a real, non-degenerate curved path, got {bounds:?}"
+        );
+    }
+
+    #[test]
+    fn font_metrics_returns_real_face_data_not_just_the_synthetic_fallback() {
+        let mut canvas = Canvas::new(400, 100).unwrap();
+        canvas.font(Font::sans_serif());
+        canvas.font_size(20.0);
+
+        let font_db = test_font_db();
+        if canvas.primary_font_id(font_db).is_none() {
+            eprintln!("skipping: no sans-serif font installed on this system");
+            return;
+        }
+
+        let metrics = canvas.font_metrics();
+        assert!(
+            metrics.ascent > 0.0,
+            "expected a positive real ascent, got {}",
+            metrics.ascent
+        );
+        assert!(
+            metrics.descent > 0.0,
+            "expected a positive real descent, got {}",
+            metrics.descent
+        );
+        // Not a strict requirement of every real font, but the synthetic
+        // fallback is exactly `font_size * 0.8` / `* 0.2` -- if a real face
+        // resolved, its ascent/descent split need not match that ratio
+        // exactly, so just confirm this isn't silently returning the
+        // fallback's *exact* values by coincidence every time.
+        assert_ne!(
+            (metrics.ascent, metrics.descent),
+            (20.0 * 0.8, 20.0 * 0.2),
+            "got exactly the synthetic fallback values -- font_metrics may not be reading the real face"
+        );
+    }
+
+    #[test]
+    fn current_font_size_reflects_the_last_set_size() {
+        let mut canvas = Canvas::new(100, 100).unwrap();
+        canvas.font_size(31.0);
+        assert_eq!(canvas.current_font_size(), 31.0);
     }
 }
